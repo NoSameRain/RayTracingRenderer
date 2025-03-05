@@ -24,7 +24,6 @@ public:
 	}
 	Vec3 at(const float t) const
 	{
-		
 		return (o + (dir * t));
 	}
 };
