@@ -6,6 +6,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define __STDC_LIB_EXT1__
 #include "stb_image_write.h"
+#include "Geometry.h"
 
 // Stop warnings about buffer overruns if size is zero. Size should never be zero and if it is the code handles it.
 #pragma warning( disable : 6386)
@@ -140,10 +141,55 @@ class BoxFilter : public ImageFilter
 public:
 	float filter(float x, float y) const
 	{
-		if (fabsf(x) < 0.5f && fabs(y) < 0.5f)
+		if (fabsf(x) <= 0.5f && fabs(y) <= 0.5f)
 		{
 			return 1.0f;
 		}
+		return 0;
+	}
+	int size() const
+	{
+		return 0;
+	}
+};
+class GaussianFilter : public ImageFilter
+{
+public:
+	float radius;
+	float alpha;
+	GaussianFilter(float r = 2.0, float a = 1.0) :radius(r), alpha(a){}
+	float filter2D(float x, float y) const
+	{
+		// x = x_sample - xi_pixel_each 
+		float x2 = SQ(x);
+		float y2 = SQ(y);
+		float d2 = x2 + y2;
+		float radius2 = SQ(radius);
+		if (d2 > radius2) return 0.0f;
+		return exp(-alpha * d2) - exp(-alpha * radius2);
+
+	}
+	float Gaussian(float d) const{
+		float d2 = SQ(d);
+		float radius2 = SQ(radius);
+		return exp(-alpha * d2) - exp(-alpha * radius2);
+	}
+	float filter(float x, float y) const
+	{
+		// x = x_sample - xi_pixel_each 
+		return Gaussian(x)*Gaussian(y);
+
+	}
+	int size() const
+	{
+		return static_cast<int>(std::ceil(radius));
+	}
+};
+class MitchellFilter : public ImageFilter
+{
+public:
+	float filter(float x, float y, float alpha, float radius) const
+	{
 		return 0;
 	}
 	int size() const
@@ -163,10 +209,36 @@ public:
 	void splat(const float x, const float y, const Colour& L)
 	{
 		// Code to splat a smaple with colour L into the image plane using an ImageFilter
+		float filterWeights[25]; // Storage to cache weights 
+		unsigned int indices[25]; // Store indices to minimize computations 
+		unsigned int used = 0;
+		float total = 0;
+		int size = filter->size();
+		for (int i = -size; i <= size; i++) {
+			for (int j = -size; j <= size; j++) {
+				int px = (int)x + j;
+				int py = (int)y + i;
+				if (px >= 0 && px < width && py >= 0 && py < height) {
+					indices[used] = (py * width) + px;
+					filterWeights[used] = filter->filter(j, i);
+					total += filterWeights[used];
+					used++;
+				}
+			}
+		}
+		for (int i = 0; i < used; i++) {
+			film[indices[i]] = film[indices[i]] + (L * filterWeights[i] / total);
+		}
 	}
 	void tonemap(int x, int y, unsigned char& r, unsigned char& g, unsigned char& b, float exposure = 1.0f)
 	{
 		// Return a tonemapped pixel at coordinates x, y
+		// from linear rgb to srgb
+		int index = y * width + x;
+		Colour pixel = film[index] * exposure / (float)SPP;
+		r = std::min(powf(std::max(pixel.r, 0.0f), 1.0f / 2.2f)*255, 255.0f);
+		g = std::min(powf(std::max(pixel.g, 0.0f), 1.0f / 2.2f)*255, 255.0f);
+		b = std::min(powf(std::max(pixel.b, 0.0f), 1.0f / 2.2f)*255, 255.0f);
 	}
 	// Do not change any code below this line
 	void init(int _width, int _height, ImageFilter* _filter)

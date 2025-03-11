@@ -1,5 +1,5 @@
 #pragma once
-
+#include <algorithm>
 #include "Core.h"
 #include "Sampling.h"
 
@@ -32,7 +32,7 @@ class Plane
 {
 public:
 	Vec3 n;
-	float d;
+	float d; // d = - n dot p0
 	void init(Vec3& _n, float _d)
 	{
 		n = _n;
@@ -41,9 +41,16 @@ public:
 	// Add code here
 	bool rayIntersect(Ray& r, float& t)
 	{
-		t = (d - n.dot(r.o)) / (n.dot(r.dir));
-		if (t > 0) return true;
-		return false;
+		//float denom = n.dot(r.dir); // denominator
+		//if (fabs(denom) < 1e-6) return false; // ray is parallel to plane
+		// 
+		//t = -(d + n.dot(r.o)) / denom; //???????????????
+
+		float denom = Dot(n, r.dir);
+		if (denom == 0) { return false; }
+
+		t = (d - Dot(n, r.o)) / denom;
+		return (t>=0); // t is how many step to reach plane
 	}
 };
 
@@ -69,7 +76,7 @@ public:
 		e2 = vertices[0].p - vertices[2].p;
 		n = e1.cross(e2).normalize();
 		area = e1.cross(e2).length() * 0.5f;
-		d = Dot(n, vertices[0].p);
+		d = Dot(n, vertices[0].p); // d = - normal dot p0 originally but here it changed to normal dot p0 ad -d
 	}
 	Vec3 centre() const
 	{
@@ -80,8 +87,10 @@ public:
 	{
 		float denom = Dot(n, r.dir);
 		if (denom == 0) { return false; }
+
 		t = (d - Dot(n, r.o)) / denom;
 		if (t < 0) { return false; }
+
 		Vec3 p = r.at(t);
 		float invArea = 1.0f / Dot(e1.cross(e2), n);
 		u = Dot(e1.cross(p - vertices[1].p), n) * invArea;
@@ -95,7 +104,6 @@ public:
 		//if (t <= 0) return false;
 		//u = e1.cross(vertices[0].p - r.at(t)) / e2.cross(vertices[1].p - r.at(t));//e1 X q / e0 X e2  ;
 
-		return true;
 	}
 	void interpolateAttributes(const float alpha, const float beta, const float gamma, Vec3& interpolatedNormal, float& interpolatedU, float& interpolatedV) const
 	{
@@ -137,11 +145,28 @@ public:
 	// Add code here
 	bool rayAABB(const Ray& r, float& t)
 	{
+		Vec3 t_B_min = (min - r.o) * r.invDir;
+		Vec3 t_B_max = (max - r.o) * r.invDir;
+		Vec3 t_entry = Min(t_B_min, t_B_max); // see what is MIn mean!
+		Vec3 t_exit = Max(t_B_min, t_B_max);
+		float t_entry_f = std::max(std::max(t_entry.x, t_entry.y), t_entry.z);
+		float t_exit_f = std::min(std::min(t_exit.x, t_exit.y), t_exit.z);
+
+		if (t_exit_f < t_entry_f || t_exit_f < 0) return false;
+		t = (t_entry_f < 0) ? t_exit_f : t_entry_f;
 		return true;
 	}
 	// Add code here
 	bool rayAABB(const Ray& r)
 	{
+		Vec3 t_B_min = (min - r.o) * r.invDir;
+		Vec3 t_B_max = (max - r.o) * r.invDir;
+		Vec3 t_entry = Min(t_B_min, t_B_max); // see what is MIn mean!
+		Vec3 t_exit = Max(t_B_min, t_B_max);
+		float t_entry_f = std::max(std::max(t_entry.x, t_entry.y), t_entry.z);
+		float t_exit_f = std::min(std::min(t_exit.x, t_exit.y), t_exit.z);
+
+		if (t_exit_f < t_entry_f || t_exit_f < 0) return false;
 		return true;
 	}
 	// Add code here
@@ -165,7 +190,27 @@ public:
 	// Add code here
 	bool rayIntersect(Ray& r, float& t)
 	{
-		return false;
+		Vec3 l = r.o - centre;
+		float b = l.dot(r.dir);
+		float c = l.dot(l) - SQ(radius);
+		float dis = SQ(b) - c;
+
+		if(dis<0) return false;
+
+		float dissqrt = sqrtf(dis);
+		float t1 = -b + dissqrt;
+		float t2 = -b - dissqrt;
+
+		if (dis > 0) {
+			if (t2 > 0) t = t2;
+			else if (t1 > 0) t = t1;
+			else return false;
+
+			return true;
+		}
+		t = -b;
+
+		return t > 0;
 	}
 };
 
