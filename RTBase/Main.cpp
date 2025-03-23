@@ -21,20 +21,6 @@ int main(int argc, char *argv[])
 	std::string filename = "GI.hdr";
 	unsigned int SPP = 8192;
 
-	Vec3 o(0.0f, 0.0f, 0.0f);
-	Vec3 dir(1.0f, 1.0f, 1.0f);
-	Ray r(o, dir);
-
-	AABB box;
-	box.extend(Vec3(0, 0.5, 0));
-	box.extend(Vec3(1, 2, 1));
-	std::cout << box.min.x << " " << box.min.y << " " << box.min.z << std::endl;
-	std::cout << box.max.x << " " << box.max.y << " " << box.max.z << std::endl;
-
-	float t;
-	box.rayAABB(r, t);
-	std::cout << t << std::endl;
-
 	if (argc > 1)
 	{
 		std::unordered_map<std::string, std::string> args;

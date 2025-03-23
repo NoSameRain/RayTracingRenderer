@@ -115,7 +115,16 @@ public:
 	// Add code here
 	Vec3 sample(Sampler* sampler, float& pdf)
 	{
-		return Vec3(0, 0, 0);
+		//3.13
+		float r1 = sampler->next();
+		float r2 = sampler->next();
+
+		float alpha = 1 - sqrt(r1);
+		float beta = r2 * sqrt(r1);
+		float gamma = 1 - alpha - beta;
+		pdf = 1.0f / area;
+		Vec3 p = vertices[0].p * alpha + vertices[1].p * beta + vertices[2].p * gamma;
+		return p;
 	}
 	Vec3 gNormal()
 	{
@@ -251,6 +260,7 @@ public:
 	void traverse(const Ray& ray, const std::vector<Triangle>& triangles, IntersectionData& intersection)
 	{
 		// Add BVH Traversal code here
+		// stack ?
 	}
 	IntersectionData traverse(const Ray& ray, const std::vector<Triangle>& triangles)
 	{

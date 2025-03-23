@@ -10,6 +10,12 @@
 #include "GamesEngineeringBase.h"
 #include <thread>
 #include <functional>
+#include <queue>
+#include <mutex>
+#include <vector>
+
+const int TILE_SIZE = 32;
+std::mutex tileIDMutex, draw;
 
 class RayTracer
 {
@@ -18,8 +24,11 @@ public:
 	GamesEngineeringBase::Window* canvas;
 	Film* film;
 	MTRandom *samplers;
-	std::thread **threads;
+	//std::thread **threads;
 	int numProcs;
+	int tilesNumX, tilesNumY;
+	std::queue<std::pair<int, int>> tileID;
+
 	void init(Scene* _scene, GamesEngineeringBase::Window* _canvas)
 	{
 		scene = _scene;
@@ -30,8 +39,12 @@ public:
 		SYSTEM_INFO sysInfo;
 		GetSystemInfo(&sysInfo);
 		numProcs = sysInfo.dwNumberOfProcessors;
-		threads = new std::thread*[numProcs];
-		samplers = new MTRandom[numProcs];
+		//threads = new std::thread*[numProcs];
+		samplers = new MTRandom[numProcs]; //tile-based
+
+		tilesNumX = (film->width + TILE_SIZE - 1) / TILE_SIZE; // ceiling
+		tilesNumY = (film->height + TILE_SIZE - 1) / TILE_SIZE;
+
 		clear();
 	}
 	void clear()
@@ -82,26 +95,87 @@ public:
 		}
 		return Colour(0.0f, 0.0f, 0.0f);
 	}
-	void render()
-	{
-		film->incrementSPP();
-		for (unsigned int y = 0; y < film->height; y++)
+	
+	void renderTile(unsigned int id_x, unsigned int id_y) {
+		int startX = id_x * TILE_SIZE;
+		int startY = id_y * TILE_SIZE;
+		int endX = min(startX + TILE_SIZE, film->width);
+		int endY = min(startY + TILE_SIZE, film->height);
+
+		for (unsigned int y = startY; y < endY; y++)
 		{
-			for (unsigned int x = 0; x < film->width; x++)
+			for (unsigned int x = startX; x < endX; x++)
 			{
+				// Pick a point in the pixel (e.g. pixel centre)
 				float px = x + 0.5f;
 				float py = y + 0.5f;
 				Ray ray = scene->camera.generateRay(px, py);
 				Colour col = viewNormals(ray);
 				//Colour col = albedo(ray);
-				film->splat(px, py, col);
-				unsigned char r = (unsigned char)(col.r * 255);
-				unsigned char g = (unsigned char)(col.g * 255);
-				unsigned char b = (unsigned char)(col.b * 255);
-				film->tonemap(x, y, r, g, b);
-				canvas->draw(x, y, r, g, b);
+				//Colour col = direct(ray, samplers);
+				{
+					//std::lock_guard<std::mutex> lock(draw);
+					film->splat(px, py, col);
+					unsigned char r = (unsigned char)(col.r * 255);
+					unsigned char g = (unsigned char)(col.g * 255);
+					unsigned char b = (unsigned char)(col.b * 255);
+					film->tonemap(x, y, r, g, b);
+					canvas->draw(x, y, r, g, b);
+				}
+				
 			}
 		}
+	}
+	
+	void getTileID() {
+		while (true) {
+			unsigned int x, y;
+			{
+				// protect queue
+				std::lock_guard<std::mutex> lock(tileIDMutex);
+				if (tileID.empty()) break;
+				x = tileID.front().first;
+				y = tileID.front().second;
+				tileID.pop();
+			}
+			renderTile(x, y);
+		}
+	}
+	void render()
+	{
+		film->incrementSPP(); //?
+
+		// init tile ID queue (0,0) (1,0) ... (X-1, Y-1)
+		for (unsigned int y = 0; y < tilesNumY; y++)
+			for (unsigned int x = 0; x < tilesNumX; x++) {
+				tileID.push({ x, y });
+			}
+
+		std::vector<std::thread> threads;
+
+		for (unsigned int i = 0; i < numProcs; i++) {
+			threads.emplace_back(&RayTracer::getTileID, this);
+		}
+		for (auto& t : threads) {
+			t.join();
+		}
+
+		//for (unsigned int y = 0; y < film->height; y++)
+		//{
+		//	for (unsigned int x = 0; x < film->width; x++)
+		//	{
+		//		float px = x + 0.5f;
+		//		float py = y + 0.5f;
+		//		Ray ray = scene->camera.generateRay(px, py);
+		//		Colour col = viewNormals(ray);
+		//		//Colour col = albedo(ray);
+		//		film->splat(px, py, col);
+		//		unsigned char r = (unsigned char)(col.r * 255);
+		//		unsigned char g = (unsigned char)(col.g * 255);
+		//		unsigned char b = (unsigned char)(col.b * 255);
+		//		canvas->draw(x, y, r, g, b);
+		//	}
+		//}
 	}
 	int getSPP()
 	{
