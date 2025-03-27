@@ -40,17 +40,40 @@ public:
 		// Add code here
 		return 1.0f;
 	}
-	static float fresnelDielectric(float cosTheta, float iorInt, float iorExt)
+	static float fresnelDielectric(float cosTheta, float iorInt, float iorExt, Vec3 &wt, Vec3 wolocal)
 	{
-		// Calculate refracted direction
+		
+		float ior = iorInt / iorExt;
+		// ??? total internal reflection
+		float sinTheta_i = sqrtf(1 - SQ(cosTheta));
+		float sinTheta_t = ior * sinTheta_i;
+		float cosTheta_t = sqrtf(1 - SQ(sinTheta_t));
+		float ior2sin2 = SQ(ior) * (1 - SQ(cosTheta));
+		if (ior2sin2 > 1) return 1.0f;
+
+		// // Calculate refracted direction
+		wt = Vec3(-ior * wolocal.x, -ior * wolocal.y, -cosTheta_t);
+
 		// Calculate Fresnel (|| and T)
+		float Fpa = (cosTheta - ior * cosTheta_t) / (cosTheta + ior * cosTheta_t); // Parallel
+		float Fpe = (ior * cosTheta - cosTheta_t) / (ior * cosTheta + ior * cosTheta_t); // Perpendicular
 		// return average^2
-		return 1.0f;
+		float average = (SQ(Fpa) + SQ(Fpe)) * 0.5f;
+		return average;
 	}
 	static Colour fresnelCondutor(float cosTheta, Colour ior, Colour k)
 	{
 		// Calculate Fresnel term for Conductors here
-		return Colour(1.0f, 1.0f, 1.0f);
+		float cos2f = SQ(cosTheta);
+		float sin2f = 1 - cos2f;
+
+		Colour cos2 = Colour(cos2f, cos2f, cos2f);
+		Colour sin2 = Colour(sin2f, sin2f, sin2f);
+		Colour n2k2 = SQ(ior) + SQ(k);
+
+		Colour Fpa2 = (n2k2 * cos2 - ior * 2.0f * cosTheta + sin2) / (n2k2 * cos2 + ior * 2.0f * cosTheta + sin2);
+		Colour Fpe2 = (n2k2 - ior * 2.0f * cosTheta + cos2) / (n2k2 + ior * 2.0f * cosTheta + cos2);
+		return (Fpa2 + Fpe2) * 0.5f;
 	}
 };
 
@@ -91,9 +114,9 @@ public:
 	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
 	{
 		// Add correct sampling code here
-		Vec3 wi = Vec3(0, 1, 0);
-		pdf = 1.0f;
-		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
+		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
+		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / M_PI;	
+		pdf = wi.z / M_PI;
 		wi = shadingData.frame.toWorld(wi);
 		return wi;
 	}
@@ -105,7 +128,8 @@ public:
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{
 		// Add correct PDF code here
-		return 1.0f;
+		Vec3 wlocal = shadingData.frame.toLocal(wi);
+		return SamplingDistributions::cosineHemispherePDF(wlocal);
 	}
 	bool isPureSpecular()
 	{
@@ -133,21 +157,24 @@ public:
 	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
 	{
 		// Add correct sampling code here
-		Vec3 wi = Vec3(0, 1, 0);
+		Vec3 wolocal = shadingData.frame.toLocal(shadingData.wo);
+		Vec3 wi(-wolocal.x, -wolocal.y, wolocal.z);
 		pdf = 1.0f;
-		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
+		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / wi.z;
+		//reflectedColour = albedo->sample(shadingData.tu, shadingData.tv);
 		wi = shadingData.frame.toWorld(wi);
 		return wi;
 	}
 	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
 	{
 		// Add correct evaluation code here
-		return albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
+		return albedo->sample(shadingData.tu, shadingData.tv) ;
+		//return Colour(0,0,0);
 	}
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{
 		// Add correct PDF code here
-		return 1.0f;
+		return 0.0f;
 	}
 	bool isPureSpecular()
 	{
@@ -228,21 +255,43 @@ public:
 	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
 	{
 		// Add correct sampling code here
-		Vec3 wi = Vec3(0, 1, 0);
+		/*Vec3 wi = Vec3(0, 1, 0);
 		pdf = 1.0f;
 		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
+		wi = shadingData.frame.toWorld(wi);
+		return wi;*/
+
+
+		Vec3 wi,wt;
+		Vec3 wolocal = shadingData.frame.toLocal(shadingData.wo);
+		float cosTheta_i = Dot(shadingData.wo, shadingData.sNormal);
+		bool enter = (cosTheta_i > 0.0f);
+		float etaI = enter ? extIOR : intIOR;
+		float etaT = enter ? intIOR : extIOR;
+
+		float R = ShadingHelper::fresnelDielectric(cosTheta_i, etaI, etaT, wt, wolocal); //????????????????????
+		if (sampler->next() < R) { // reflection
+			wi = Vec3(-wolocal.x, -wolocal.y, wolocal.z);
+			pdf = R;
+		}
+		else { // refrection
+			wi = wt;
+			pdf = 1 - R;
+		}
+		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / wi.z;
 		wi = shadingData.frame.toWorld(wi);
 		return wi;
 	}
 	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
 	{
 		// Add correct evaluation code here
-		return albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
+		return albedo->sample(shadingData.tu, shadingData.tv);
 	}
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{
 		// Add correct PDF code here
-		return 1.0f;
+		//return 1.0f;
+		return 0.0f;
 	}
 	bool isPureSpecular()
 	{

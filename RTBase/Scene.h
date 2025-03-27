@@ -29,16 +29,6 @@ public:
 	// Add code here
 	Ray generateRay(float x, float y)
 	{
-		/*Vec3 dir(0, 0, 1);
-		float xc = 2 * x / (width - 1) - 1;
-		float yc = 2 * y / (height - 1) - 1;
-		Vec3 pclip = Vec3(xc, yc, 0,1);
-		Vec3 Pcam = inverseProjectionMatrix.mulVec(pclip);
-		Vec3 Dcamera = Pcam / Pcam.w;
-		Vec3 d = camera.mulVec(Dcamera);*/
-
-		//return Ray(origin, d);
-
 		float xprime = x / width;
 		float yprime = 1.0f - (y / height);
 		xprime = (xprime * 2.0f) - 1.0f;
@@ -64,7 +54,15 @@ public:
 	void build()
 	{
 		// Add BVH building code here
-		
+		std::vector<Triangle> inputTriangles;
+		for (int i = 0; i < triangles.size(); i++)
+		{
+			inputTriangles.push_back(triangles[i]);
+		}
+		triangles.clear();
+		bvh = new BVHNode();
+		bvh->build(inputTriangles, triangles);
+
 		// Do not touch the code below this line!
 		// Build light list
 		for (int i = 0; i < triangles.size(); i++)
@@ -80,7 +78,7 @@ public:
 	}
 	IntersectionData traverse(const Ray& ray)
 	{
-		IntersectionData intersection;
+		/*IntersectionData intersection;
 		intersection.t = FLT_MAX;
 		for (int i = 0; i < triangles.size(); i++)
 		{
@@ -99,11 +97,17 @@ public:
 				}
 			}
 		}
-		return intersection;
+		return intersection;*/
+		return bvh->traverse(ray, triangles);
 	}
 	Light* sampleLight(Sampler* sampler, float& pmf)
 	{
-		return NULL;
+		//float r = sampler->next();
+		//pmf = 1.0f / (float)lights.size();
+		//return lights[floor(r * lights.size())];
+
+		pmf = 1.f / lights.size();
+		return lights[(std::min)((int)(lights.size() * sampler->next()), (int)(lights.size() - 1))];
 	}
 	// Do not modify any code below this line
 	void init(std::vector<Triangle> meshTriangles, std::vector<BSDF*> meshMaterials, Light* _background)
