@@ -285,7 +285,7 @@ public:
 	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)
 	{
 		// Add correct evaluation code here
-		return albedo->sample(shadingData.tu, shadingData.tv);
+		return Colour(0.0f, 0.0f, 0.0f);
 	}
 	float PDF(const ShadingData& shadingData, const Vec3& wi)
 	{

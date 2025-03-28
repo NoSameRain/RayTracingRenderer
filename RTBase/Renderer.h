@@ -99,7 +99,7 @@ public:
 				// Trace
 				if (scene->visible(shadingData.x, shadingData.x + (p * 10000.0f)))
 				{
-					// Shade
+					// Shade DirectIllum=BSDF × Emission × G × Visibility.
 					return shadingData.bsdf->evaluate(shadingData, wi) * emitted * GTerm / (pmf * pdf);
 				}
 			}
