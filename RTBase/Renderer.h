@@ -15,8 +15,8 @@
 #include <vector>
 
 const int TILE_SIZE = 32;
-std::mutex tileIDMutex, draw;
-const int MAX_DEPTH =5; //?
+std::mutex tileIDMutex;
+const int MAX_DEPTH = 4; //?
 
 class RayTracer
 {
@@ -66,10 +66,6 @@ public:
 		// Sample a point on the light
 		float pdf;
 		Colour emitted;
-
-		if (!light) { // light nullptr 
-			return Colour(0.0f, 0.0f, 0.0f);
-		}
 
 		Vec3 p = light->sample(shadingData, sampler, emitted, pdf);
 		if (light->isArea())
@@ -142,7 +138,7 @@ public:
 			Colour indirect;
 			float pdf;
 			Vec3 wi = shadingData.bsdf->sample(shadingData, sampler, indirect, pdf);
-			//wi = shadingData.frame.toWorld(wi);
+
 			pathThroughput = pathThroughput * indirect * fabsf(Dot(wi, shadingData.sNormal)) / pdf;
 
 			/*Colour bsdf;
@@ -154,9 +150,11 @@ public:
 			pathThroughput = pathThroughput * bsdf * fabsf(Dot(wi, shadingData.sNormal)) / pdf;*/
 			
 			r.init(shadingData.x + (wi * EPSILON), wi);
+
+
 			return (direct + pathTrace(r, pathThroughput, depth + 1, sampler, shadingData.bsdf->isPureSpecular()));
 		}
-		return scene->background->evaluate(shadingData, r.dir);
+		return scene->background->evaluate(r.dir);
 
 	}
 	Colour direct(Ray& r, Sampler* sampler)
@@ -186,7 +184,7 @@ public:
 			}
 			return shadingData.bsdf->evaluate(shadingData, Vec3(0, 1, 0));
 		}
-		return scene->background->evaluate(shadingData, r.dir);
+		return scene->background->evaluate(r.dir);
 	}
 	Colour viewNormals(Ray& r)
 	{
