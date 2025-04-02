@@ -111,11 +111,11 @@ public:
 		interpolatedV = vertices[0].v * alpha + vertices[1].v * beta + vertices[2].v * gamma;
 	}
 	// Add code here
-	Vec3 sample(Sampler* sampler, float& pdf)
+	Vec3 sample(Sampler& sampler, float& pdf)
 	{
 		//3.13
-		float r1 = sampler->next();
-		float r2 = sampler->next();
+		float r1 = sampler.next();
+		float r2 = sampler.next();
 
 		float alpha = 1 - sqrtf(r1);
 		float beta = r2 * sqrtf(r1);
@@ -237,7 +237,7 @@ struct IntersectionData
 	float gamma;
 };
 
-#define MAXNODE_TRIANGLES 8
+#define MAXNODE_TRIANGLES 2 //？
 #define TRAVERSE_COST 1.0f
 #define TRIANGLE_COST 2.0f
 #define BUILD_BINS 32
@@ -409,7 +409,7 @@ public:
 			for (int i = startIndex; i < endIndex; i++) {
 				float t, u, v;
 				if (triangles[i].rayIntersect(ray, t, u, v)) {
-					if (t < intersection.t && t > 1e-4f)
+					if (t < intersection.t && t > 1e-6f)
 					{
 						intersection.t = t;  //update smallest t
 						intersection.ID = i;
@@ -447,7 +447,7 @@ public:
 			for (int i = startIndex; i < endIndex; i++) {
 				float t, u, v;
 				if (triangles[i].rayIntersect(ray, t, u, v)) {
-					if (t < maxT && t > 1e-4f)
+					if (t < maxT && t > 1e-6f)
 					{
 						//std::cout << "invisible" << std::endl;
 						return false;
@@ -460,194 +460,6 @@ public:
 		bool rightVisible = (r ? r->traverseVisible(ray, triangles, maxT) : true);
 		return (leftVisible && rightVisible);
 	}
-};
-
-class BVHNode2
-{
-public:
-	AABB bounds;
-	BVHNode2* l;
-	BVHNode2* r;
-
-	int startIndex;
-	int endIndex;
-
-	BVHNode2()
-		: l(nullptr)
-		, r(nullptr)
-		, startIndex(0)
-		, endIndex(0)
-	{
-	}
-
-	static AABB triangleBounds(const Triangle& tri)
-	{
-		AABB box;
-		box.reset();
-		box.extend(tri.vertices[0].p);
-		box.extend(tri.vertices[1].p);
-		box.extend(tri.vertices[2].p);
-		return box;
-	}
-	// using indices to sort
-	void buildRecursive(std::vector<Triangle>& triangles, int start, int end)
-	{
-		bounds.reset();
-		for (int i = start; i < end; i++) {
-			bounds.extend(triangles[i].vertices[0].p);
-			bounds.extend(triangles[i].vertices[1].p);
-			bounds.extend(triangles[i].vertices[2].p);
-		}
-
-		int numTriangles = end - start;
-		if (numTriangles <= MAXNODE_TRIANGLES)
-		{
-			this->startIndex = start;
-			this->endIndex = end;
-			return;
-		}
-
-
-		Vec3 size = bounds.max - bounds.min;
-		int axis = 0;
-		if (size.y > size.x && size.y > size.z)
-			axis = 1;
-		else if (size.z > size.x && size.z > size.y)
-			axis = 2;
-
-		std::sort(triangles.begin() + start, triangles.begin() + end,
-			[axis](const Triangle& a, const Triangle& b) {
-				float ca = (axis == 0) ? a.centre().x : (axis == 1) ? a.centre().y : a.centre().z;
-				float cb = (axis == 0) ? b.centre().x : (axis == 1) ? b.centre().y : b.centre().z;
-				return ca < cb;
-			});
-
-		int n = numTriangles;
-		std::vector<AABB> leftBounds(n);
-		std::vector<AABB> rightBounds(n);
-		leftBounds[0] = triangleBounds(triangles[start]);
-		for (int i = 1; i < n; i++) {
-			leftBounds[i] = leftBounds[i - 1];
-			leftBounds[i].extend(triangleBounds(triangles[start + i]));
-		}
-		rightBounds[n - 1] = triangleBounds(triangles[end - 1]);
-		for (int i = n - 2; i >= 0; i--) {
-			rightBounds[i] = rightBounds[i + 1];
-			rightBounds[i].extend(triangleBounds(triangles[start + i]));
-		}
-
-		float totalArea = bounds.area();
-		float bestCost = FLT_MAX;
-		int bestSplit = -1;
-
-		for (int i = 1; i < n; i++) {
-			float leftArea = leftBounds[i - 1].area();
-			float rightArea = rightBounds[i].area();
-			int leftCount = i;
-			int rightCount = n - i;
-			float cost = 1.0f + (leftArea * leftCount + rightArea * rightCount) / totalArea;
-			if (cost < bestCost) {
-				bestCost = cost;
-				bestSplit = i;
-			}
-		}
-
-		if (bestCost >= static_cast<float>(numTriangles)) {
-			this->startIndex = start;
-			this->endIndex = end;
-			return;
-		}
-
-		int mid = start + bestSplit;
-		l = new BVHNode2();
-		r = new BVHNode2();
-		l->buildRecursive(triangles, start, mid);
-		r->buildRecursive(triangles, mid, end);
-	}
-
-	void build(std::vector<Triangle>& inputTriangles, std::vector<Triangle>& triangles)
-	{
-		triangles = inputTriangles;
-		buildRecursive(triangles, 0, static_cast<int>(triangles.size()));
-	}
-
-	void traverse(const Ray& ray, const std::vector<Triangle>& triangles, IntersectionData& intersection)
-	{
-		float tBox;
-		if (!bounds.rayAABB(ray, tBox)) {
-			return;
-		}
-
-		if (!l && !r)
-		{
-			for (int i = startIndex; i < endIndex; i++)
-			{
-				float t, u, v;
-				if (triangles[i].rayIntersect(ray, t, u, v) && t > 1e-4f && t < intersection.t)
-				{
-					/*intersection.t = t;
-					intersection.alpha = 1 - u - v;
-					intersection.beta = u;
-					intersection.gamma = v;
-					intersection.ID = i;*/
-
-					intersection.t = t;
-					intersection.ID = i;
-					intersection.alpha = u;
-					intersection.beta = u;
-					intersection.gamma = 1.0f - (u + v);
-				}
-			}
-			return;
-		}
-
-		if (l) l->traverse(ray, triangles, intersection);
-		if (r) r->traverse(ray, triangles, intersection);
-	}
-
-	IntersectionData traverse(const Ray& ray, const std::vector<Triangle>& triangles)
-	{
-		IntersectionData intersection;
-		intersection.t = FLT_MAX;
-		traverse(ray, triangles, intersection);
-		return intersection;
-	}
-
-	bool traverseVisible(const Ray& ray, const std::vector<Triangle>& triangles, float maxT)
-	{
-		float tBox;
-		float tMin, tMax;
-		if (!bounds.rayAABB(ray, tMin)) {
-			return true;
-		}
-
-		if (tMin > maxT) {
-			return true;
-		}
-
-		if (!l && !r)
-		{
-			for (int i = startIndex; i < endIndex; i++) // missing
-			{
-				float t, u, v;
-				if (triangles[i].rayIntersect(ray, t, u, v) && t > 1e-4f && t < maxT)
-				{
-					return false;
-				}
-			}
-			return true;
-		}
-
-		bool leftVis = l ? l->traverseVisible(ray, triangles, maxT) : true;
-		bool rightVis = r ? r->traverseVisible(ray, triangles, maxT) : true;
-		return leftVis && rightVis;
-		/*bool leftVis = l ? l->traverseVisible(ray, triangles, maxT) : true;
-		if (leftVis)
-			return true;
-		bool rightVis = r ? r->traverseVisible(ray, triangles, maxT) : true;
-		return rightVis;*/
-	}
-
 };
 
 

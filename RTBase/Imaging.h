@@ -257,6 +257,7 @@ public:
 	void incrementSPP()
 	{
 		SPP++;
+		//std::cout << SPP << std::endl;
 	}
 	void save(std::string filename)
 	{

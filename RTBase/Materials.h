@@ -90,7 +90,7 @@ class BSDF
 {
 public:
 	Colour emission;
-	virtual Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf) = 0;
+	virtual Vec3 sample(const ShadingData& shadingData, Sampler& sampler, Colour& reflectedColour, float& pdf) = 0;
 	virtual Colour evaluate(const ShadingData& shadingData, const Vec3& wi) = 0;
 	virtual float PDF(const ShadingData& shadingData, const Vec3& wi) = 0;
 	virtual bool isPureSpecular() = 0;
@@ -120,9 +120,9 @@ public:
 	{
 		albedo = _albedo;
 	}
-	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
+	Vec3 sample(const ShadingData& shadingData, Sampler& sampler, Colour& reflectedColour, float& pdf)
 	{
-		Vec3 wi_local = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
+		Vec3 wi_local = SamplingDistributions::cosineSampleHemisphere(sampler.next(), sampler.next());
 		pdf = SamplingDistributions::cosineHemispherePDF(wi_local);
 		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
 		Vec3 wi = shadingData.frame.toWorld(wi_local);
@@ -160,7 +160,7 @@ public:
 	{
 		albedo = _albedo;
 	}
-	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
+	Vec3 sample(const ShadingData& shadingData, Sampler& sampler, Colour& reflectedColour, float& pdf)
 	{
 		// Add correct sampling code here
 		Vec3 wolocal = shadingData.frame.toLocal(shadingData.wo);
@@ -213,10 +213,10 @@ public:
 		k = _k;
 		alpha = 1.62142f * sqrtf(roughness);
 	}
-	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
+	Vec3 sample(const ShadingData& shadingData, Sampler& sampler, Colour& reflectedColour, float& pdf)
 	{
 		// Replace this with Conductor sampling code
-		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
+		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler.next(), sampler.next());
 		pdf = wi.z / M_PI;
 		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
 		wi = shadingData.frame.toWorld(wi);
@@ -260,7 +260,7 @@ public:
 		intIOR = _intIOR;
 		extIOR = _extIOR;
 	}
-	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
+	Vec3 sample(const ShadingData& shadingData, Sampler& sampler, Colour& reflectedColour, float& pdf)
 	{
 		// Add correct sampling code here
 		/*Vec3 wi = Vec3(0, 1, 0);
@@ -278,7 +278,7 @@ public:
 		float etaT = enter ? intIOR : extIOR;
 
 		float R = ShadingHelper::fresnelDielectric(cosTheta_i, etaI, etaT, wt, wolocal); //????????????????????
-		if (sampler->next() < R) { // reflection
+		if (sampler.next() < R) { // reflection
 			wi = Vec3(-wolocal.x, -wolocal.y, wolocal.z);
 			pdf = R;
 		}
@@ -331,10 +331,10 @@ public:
 		extIOR = _extIOR;
 		alpha = 1.62142f * sqrtf(roughness);
 	}
-	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
+	Vec3 sample(const ShadingData& shadingData, Sampler& sampler, Colour& reflectedColour, float& pdf)
 	{
 		// Replace this with Dielectric sampling code
-		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
+		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler.next(), sampler.next());
 		pdf = wi.z / M_PI;
 		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
 		wi = shadingData.frame.toWorld(wi);
@@ -376,10 +376,10 @@ public:
 		albedo = _albedo;
 		sigma = _sigma;
 	}
-	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
+	Vec3 sample(const ShadingData& shadingData, Sampler& sampler, Colour& reflectedColour, float& pdf)
 	{
 		// Replace this with OrenNayar sampling code
-		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
+		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler.next(), sampler.next());
 		pdf = wi.z / M_PI;
 		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
 		wi = shadingData.frame.toWorld(wi);
@@ -429,10 +429,10 @@ public:
 	{
 		return (2.0f / SQ(std::max(alpha, 0.001f))) - 2.0f;
 	}
-	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
+	Vec3 sample(const ShadingData& shadingData, Sampler& sampler, Colour& reflectedColour, float& pdf)
 	{
 		// Replace this with Plastic sampling code
-		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler->next(), sampler->next());
+		Vec3 wi = SamplingDistributions::cosineSampleHemisphere(sampler.next(), sampler.next());
 		pdf = wi.z / M_PI;
 		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
 		wi = shadingData.frame.toWorld(wi);
@@ -480,7 +480,7 @@ public:
 		intIOR = _intIOR;
 		extIOR = _extIOR;
 	}
-	Vec3 sample(const ShadingData& shadingData, Sampler* sampler, Colour& reflectedColour, float& pdf)
+	Vec3 sample(const ShadingData& shadingData, Sampler& sampler, Colour& reflectedColour, float& pdf)
 	{
 		// Add code to include layered sampling
 		return base->sample(shadingData, sampler, reflectedColour, pdf);

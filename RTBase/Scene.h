@@ -91,9 +91,6 @@ public:
 		bvh = new BVHNode();
 		bvh->build(inputTriangles, triangles);
 
-		//std::cout << "Number of Triangles: " << triangles.size() << "\n";
-		//std::cout << "BVH extent: " << bvh->startIndex << " - " << bvh->endIndex << "\n";
-
 		// Do not touch the code below this line!
 		// Build light list
 		for (int i = 0; i < triangles.size(); i++)
@@ -131,14 +128,14 @@ public:
 		return intersection;*/
 		return bvh->traverse(ray, triangles);
 	}
-	Light* sampleLight(Sampler* sampler, float& pmf)
+	Light* sampleLight(Sampler& sampler, float& pmf)
 	{
 		//float r = sampler->next();
 		//pmf = 1.0f / (float)lights.size();
 		//return lights[floor(r * lights.size())];
 
 		pmf = 1.f / lights.size();
-		return lights[(std::min)((int)(lights.size() * sampler->next()), (int)(lights.size() - 1))];
+		return lights[(std::min)((int)(lights.size() * sampler.next()), (int)(lights.size() - 1))];
 
 	}
 	// Do not modify any code below this line
