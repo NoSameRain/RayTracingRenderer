@@ -5,6 +5,7 @@
 #include "GamesEngineeringBase.h"
 #include <unordered_map>
 
+
 void runTests()
 {
 	// Add test code here
@@ -112,6 +113,7 @@ int main(int argc, char *argv[])
 		float t = timer.dt();
 		// Write
 		std::cout << t << std::endl;
+		//std::cout << rt.getSPP() << std::endl;
 		if (canvas.keyPressed('P'))
 		{
 			rt.saveHDR(filename);

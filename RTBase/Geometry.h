@@ -52,7 +52,7 @@ public:
 		if (denom == 0) { return false; }
 
 		t = (d - Dot(n, r.o)) / denom;
-		return (t>=0); // t is how many step to reach plane
+		return (t >= 0); // t is how many step to reach plane
 	}
 };
 
@@ -209,7 +209,7 @@ public:
 		float c = l.dot(l) - SQ(radius);
 		float dis = SQ(b) - c;
 
-		if(dis<0) return false;
+		if (dis < 0) return false;
 
 		float dissqrt = sqrtf(dis);
 		float t1 = -b + dissqrt;
@@ -244,7 +244,7 @@ struct IntersectionData
 
 struct TriangleComparator {
 	int axis;
-	TriangleComparator(int a) :axis(a){}
+	TriangleComparator(int a) :axis(a) {}
 
 	bool operator()(const Triangle& a, const Triangle& b) {
 		if (axis == 0) return a.centre().x < b.centre().x;
@@ -354,7 +354,7 @@ public:
 		// left prefix and right suffix array
 		std::vector<AABB> leftBounds(numTri), rightBounds(numTri);
 		leftBounds[0] = triangleBound(triangles[start]);
-		rightBounds[numTri-1] = triangleBound(triangles[end-1]);
+		rightBounds[numTri - 1] = triangleBound(triangles[end - 1]);
 		// store left-to-right AABBs
 		for (int i = 1; i < numTri; i++) {
 			leftBounds[i] = leftBounds[i - 1];
@@ -371,7 +371,7 @@ public:
 		int split_index = 0;
 
 		for (int i = 1; i < numTri; i++) {
-			float area_left = leftBounds[i-1].area();
+			float area_left = leftBounds[i - 1].area();
 			float area_right = rightBounds[i].area();
 			float num_left = i;
 			float num_right = numTri - i;
@@ -400,7 +400,7 @@ public:
 	{
 		// Add BVH Traversal code here
 		// stack ?
-		// 1 if ray intersec the bound
+		// 1 if ray not intersect the bound
 		if (!bounds.rayAABB(ray)) {
 			return;
 		}
@@ -409,7 +409,7 @@ public:
 			for (int i = startIndex; i < endIndex; i++) {
 				float t, u, v;
 				if (triangles[i].rayIntersect(ray, t, u, v)) {
-					if (t < intersection.t && t > 1e-6f)
+					if (t < intersection.t && t > 1e-4)
 					{
 						intersection.t = t;  //update smallest t
 						intersection.ID = i;
@@ -441,13 +441,13 @@ public:
 			return true;
 		}
 		// or p2-p1 length less than t
-		if(t > maxT) return true;
+		//if (t > maxT) return true;
 		// iterate all tris in this node
 		if (!l && !r) {
 			for (int i = startIndex; i < endIndex; i++) {
 				float t, u, v;
 				if (triangles[i].rayIntersect(ray, t, u, v)) {
-					if (t < maxT && t > 1e-6f)
+					if (t < maxT && t > 1e-4)
 					{
 						//std::cout << "invisible" << std::endl;
 						return false;
@@ -456,11 +456,15 @@ public:
 			}
 			return true;
 		}
-		bool leftVisible = (l ? l->traverseVisible(ray, triangles, maxT) : true);
+		/*bool leftVisible = (l ? l->traverseVisible(ray, triangles, maxT) : true);
 		bool rightVisible = (r ? r->traverseVisible(ray, triangles, maxT) : true);
-		return (leftVisible && rightVisible);
+		return (leftVisible && rightVisible);*/
+
+		bool leftVisible = l->traverseVisible(ray, triangles, maxT);
+		if (!leftVisible)
+			return false;
+		return  r->traverseVisible(ray, triangles, maxT);
 	}
 };
-
 
 

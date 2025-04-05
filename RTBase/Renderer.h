@@ -13,6 +13,7 @@
 #include <queue>
 #include <mutex>
 #include <vector>
+#include <OpenImageDenoise/oidn.hpp>
 
 const int TILE_SIZE = 32;
 std::mutex tileIDMutex, varianceMutex;
@@ -20,6 +21,12 @@ const int MAX_DEPTH = 4;
 const int MAX_SAMPLES = 100000;
 const int MIN_SAMPLES = 1;
 const int INIT_SAMPLES = 4;
+
+struct VPL 
+{
+	ShadingData shadingData;
+	Colour Le;
+};
 
 class RayTracer
 {
@@ -33,6 +40,7 @@ public:
 	int tilesNumX, tilesNumY,totalTiles;
 	std::queue<std::pair<int, int>> tileID;
 	std::vector<float> tileVariances, tileWeights;
+	std::vector<VPL> vpls;
 
 	void init(Scene* _scene, GamesEngineeringBase::Window* _canvas)
 	{
@@ -57,6 +65,165 @@ public:
 	void clear()
 	{
 		film->clear();
+	}
+
+	// ----------------------------------------instant radiosity ----------------------------------------------
+	void renderBlockinstantRadiosity(int start, int end, Sampler& sampler) {
+		for (unsigned int y = start; y < end; y++)
+		{
+			for (unsigned int x = 0; x < film->width; x++)
+			{
+				float px = x + 0.5f;
+				float py = y + 0.5f;
+				Ray r = scene->camera.generateRay(px, py);
+				int bounce = 0;
+				// find first non-specular vertex????????????????????????????????????????????????????????????????
+				IntersectionData intersection = scene->traverse(r);
+				ShadingData shadingData = scene->calculateShadingData(intersection, r);
+
+				if (shadingData.t < FLT_MAX) {
+					Colour col = computeVPLsContribution(shadingData); //???????????????????????????????????????????????????????????????
+					film->splat(x, y, col);
+				}
+			}
+		}
+	}
+	void instantRadiosity() {
+		vpls.clear();
+		// first pass
+		// trace paths from the light and store VPLs at each interaction
+		traceVPLs(samplers[0], 50);
+		
+		// second pass
+		// iterate all pixels (mult-threads) and trace a path from cam to first non-specular vertex
+		std::vector<std::thread> threads_ir;
+		int height = film->height;
+		int blockSize = height / numProcs;
+		for (int t = 0; t < numProcs; t++) {
+			int yStart = t * blockSize;
+			int yEnd = (t == numProcs - 1) ? height : yStart + blockSize;
+			threads_ir.emplace_back(&RayTracer::renderBlockinstantRadiosity, this, yStart, yEnd, std::ref(samplers[t]));
+		}
+
+		for (auto& th : threads_ir) {
+			th.join();
+		}
+		
+		// draw
+		for (unsigned int y = 0; y < film->height; y++)
+		{
+			for (unsigned int x = 0; x < film->width; x++)
+			{
+				int id = (y * film->width) + x;
+				Colour col = film->film[id];
+				unsigned char r = (unsigned char)(col.r * 255);
+				unsigned char g = (unsigned char)(col.g * 255);
+				unsigned char b = (unsigned char)(col.b * 255);
+				film->tonemap(x, y, r, g, b);
+				canvas->draw(x, y, r, g, b);
+			}
+		}
+	}
+	// ditrct
+	Colour computeVPLsContribution(ShadingData shadingData) {
+		if (shadingData.bsdf->isLight() || shadingData.bsdf->isPureSpecular()) {
+			return Colour(0.0f, 0.0f, 0.0f);
+		}
+		
+		Colour col_sum(0.0f, 0.0f, 0.0f);
+		for (auto& vpl : vpls) {
+			// intersection to vpl??????????????????????????????????????????????????????????????
+			Vec3 direction = vpl.shadingData.x - shadingData.x; 
+			float dist2 = direction.lengthSq();
+			if (dist2 < 1e-12f) {
+				//continue;
+			}
+			direction = direction.normalize();
+
+			float cos_theta_vpl = Dot(vpl.shadingData.sNormal, -direction);
+			float cos_theta_x = Dot(shadingData.sNormal, direction);
+
+			// G term
+			if (cos_theta_vpl <= 0.0f || cos_theta_x <= 0.0f) continue;
+			float G = (cos_theta_vpl * cos_theta_x) / dist2;
+
+			// Visible
+			if (!scene->visible(shadingData.x, vpl.shadingData.x))
+				continue;
+
+			// color * bsdf * G term
+			Colour bsdf;
+			bsdf = shadingData.bsdf->evaluate(shadingData, direction);
+			//if (vpl.isLight) { // vpl on light
+			//	bsdf = shadingData.bsdf->evaluate(shadingData, direction);
+			//}
+			//else { // vpl on surface
+			//	bsdf = shadingData.bsdf->evaluate(vpl.shadingData, -direction) * shadingData.bsdf->evaluate(shadingData, direction);
+			//}
+			Colour col = vpl.Le * bsdf * G;
+			col_sum = col_sum + col;
+		}
+		return (col_sum);
+	}
+	void traceVPLs(Sampler& sampler, int N_VPLs) {
+		for (int i = 0; i < N_VPLs; i++) {
+			float pmf;
+			Light* light = scene->sampleLight(sampler, pmf);
+			if (light->isArea()) {
+				// Sample a point on the light
+				float pdfPosition, pdfDirection;
+				Vec3 p = light->samplePositionFromLight(sampler, pdfPosition);
+				Vec3 wi = light->sampleDirectionFromLight(sampler, pdfDirection);
+				// VPL on light source
+				VPL vpl;
+				ShadingData tmp;
+				//vpl.isLight = true;
+				vpl.shadingData = ShadingData(p, light->normal(tmp, p));
+				vpl.Le = light->evaluate(-wi) / (pmf * pdfPosition * (float)N_VPLs); // ???????
+				vpls.push_back(vpl);
+
+				Colour Le = light->evaluate(-wi) * Dot(wi, light->normal(tmp, p)) / (pmf * pdfPosition  * (float)N_VPLs); // ????????
+				Ray r = Ray(p, wi);
+				Colour pathThroughput(1.0f, 1.0f, 1.0f);
+				// trace VPL path
+				VPLTracePath(r, pathThroughput, Le, sampler);
+			}
+		}
+	}
+	void VPLTracePath(Ray& r, Colour pathThroughput, Colour Le, Sampler& sampler) {
+		IntersectionData intersection = scene->traverse(r);
+		ShadingData shadingData = scene->calculateShadingData(intersection, r);
+
+		if (shadingData.t < FLT_MAX) {
+			if (!shadingData.bsdf->isLight() && !shadingData.bsdf->isPureSpecular())
+			{
+				// -------------store-------------------
+				VPL vpl;
+				vpl.shadingData = shadingData;
+				vpl.Le = pathThroughput * Le;
+				vpls.push_back(vpl);
+			}
+			float russianRouletteProbability = min(pathThroughput.Lum(), 0.9f);
+			if (sampler.next() < russianRouletteProbability)
+			{
+				pathThroughput = pathThroughput / russianRouletteProbability;
+			}
+			else
+			{
+				return;
+			}
+			// sample the BSDF to get next bounce direction
+			Colour bsdfVal;
+			float pdf;
+			Vec3 wi = shadingData.bsdf->sample(shadingData, sampler, bsdfVal, pdf);
+
+			pathThroughput = pathThroughput * bsdfVal * fabsf(Dot(wi, shadingData.sNormal)) / pdf;
+
+			r.init(shadingData.x + (wi * EPSILON), wi);
+
+			VPLTracePath(r, pathThroughput, Le, sampler);
+		}
+		return;
 	}
 	Colour computeDirect(ShadingData shadingData, Sampler& sampler)
 	{
@@ -109,20 +276,56 @@ public:
 		return Colour(0.0f, 0.0f, 0.0f);
 
 	}
+	// ----------------------------------------light tracing ----------------------------------------------
+	void lightTracingRender() {
+		// trace
+		for (unsigned int y = 0; y < film->height; y++)
+		{
+			for (unsigned int x = 0; x < film->width; x++)
+			{
+				lightTrace(samplers[0]);
+			}
+		}
+		// denoise
+		denoise();
+		// draw
+		for (unsigned int y = 0; y < film->height; y++)
+		{
+			for (unsigned int x = 0; x < film->width; x++)
+			{
+				int id = (y * film->width) + x;
+				Colour col = film->film[id];
+				unsigned char r = (unsigned char)(col.r * 255);
+				unsigned char g = (unsigned char)(col.g * 255);
+				unsigned char b = (unsigned char)(col.b * 255);
+				film->tonemap(x, y, r, g, b);
+
+				canvas->draw(x, y, r, g, b);
+			}
+		}
+	}
 	void connectToCamera(Vec3 p, Vec3 n, Colour col)
 	{
 		float x, y;
-		if (scene->camera.projectOntoCamera(p, x, y) && scene->visible(p,scene->camera.origin)) {
+		if (scene->camera.projectOntoCamera(p, x, y)) {
 			float A_film = scene->camera.Afilm;
-			Vec3 direction = scene->camera.origin - p; // ?????
+			Vec3 direction = scene->camera.origin - p; // p to cam
 			float dist2 = direction.lengthSq();
 			direction = direction.normalize();
 
 			float cos_theta_shading = Dot(n, direction);
-			float cos_theta_cam = Dot(scene->camera.viewDirection, direction);
+			float cos_theta_cam = Dot(scene->camera.viewDirection, -direction);
 
 			// G term
-			float G = (max(cos_theta_shading, 0.0f) * max(-cos_theta_cam, 0.0f)) / dist2;
+			/*float G = (max(cos_theta_shading, 0.0f) * max(-cos_theta_cam, 0.0f)) / dist2;
+			if (G < 0.0f)
+				return;*/
+			if (cos_theta_shading < 0.0f || cos_theta_cam < 0.0f) return;
+			float G = (cos_theta_shading * cos_theta_cam) / dist2;
+
+			if (!scene->visible(p, scene->camera.origin))
+				return;
+
 			//float G = max(cos_theta_shading, 0.0f) / dist2;
 			// 
 			// importance  term
@@ -132,7 +335,6 @@ public:
 			film->splat(x, y, color);
 		}
 	}
-
 	void lightTrace(Sampler& sampler)
 	{
 		// Sample a light
@@ -149,23 +351,26 @@ public:
 			Vec3 lightNormal = light->normal(tmp, wi);
 			float cosTheta = Dot(lightNormal, wi);
 			
-			Colour col = light->evaluate(-wi) * cosTheta/ (pmf * pdfDirection * pdfPosition);
-			Colour Le = col * cosTheta;
+			Colour Le = light->evaluate(-wi) * cosTheta/ (pmf * pdfDirection * pdfPosition);
 
-			connectToCamera(p, lightNormal, col);
+			connectToCamera(p, lightNormal, Le);
 
 			Ray r = Ray(p, wi);
 			Colour pathThroughput(1.0f, 1.0f, 1.0f);
 			lightTracePath(r, pathThroughput, Le, sampler);
 		}
 	}
-
 	void lightTracePath(Ray& r, Colour pathThroughput, Colour Le, Sampler& sampler)
 	{
 		IntersectionData intersection = scene->traverse(r);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
+		
 		if (shadingData.t < FLT_MAX ) {
-			// direction from intersection to camera
+			if (shadingData.bsdf->isLight() || shadingData.bsdf->isPureSpecular())
+			{
+				return;
+			}
+			//direction from intersection to camera
 			Vec3 wi = scene->camera.origin - shadingData.x;
 			wi = wi.normalize();
 			// the contribution for connecting the intersection to the camera
@@ -195,7 +400,7 @@ public:
 		}
 		return;
 	}
-
+	// ----------------------------------------path tracing ----------------------------------------------
 	Colour pathTrace(Ray& r, Colour& pathThroughput, int depth, Sampler& sampler, bool canHitLight = true)
 	{
 		IntersectionData intersection = scene->traverse(r);
@@ -459,13 +664,56 @@ public:
 	//		t.join();
 	//	}
 	//}
+
+
+	void denoise() { // only used beauty image to denoise here, no AOVs
+		int width = film->width;
+		int height = film->height;
+		int numPixels = width * height;
+		size_t bufferSize = numPixels * 3 * sizeof(float);
+
+		// create device
+		oidn::DeviceRef device = oidn::newDevice();
+		device.commit();
+
+		// buffer to input and output image data
+		oidn::BufferRef colorBuf = device.newBuffer(bufferSize);
+
+		// create a filter for denoising a color image
+		oidn::FilterRef filter = device.newFilter("RT");
+
+		filter.setImage("color", colorBuf, oidn::Format::Float3, width, height);
+		filter.setImage("output", colorBuf, oidn::Format::Float3, width, height);
+
+		filter.set("hdr", true);
+		filter.commit();
+
+		// fill the input image buffers copy from film
+		float* colorPtr = (float*)colorBuf.getData();
+		for (int i = 0; i < numPixels; i++) {
+			colorPtr[3 * i + 0] = film->film[i].r;
+			colorPtr[3 * i + 1] = film->film[i].g;
+			colorPtr[3 * i + 2] = film->film[i].b;
+		}
+
+		// filter the image
+		filter.execute();
+
+		// re-write to film
+		colorPtr = (float*)colorBuf.getData();
+		for (int i = 0; i < numPixels; i++) {
+			film->film[i].r = colorPtr[3 * i + 0];
+			film->film[i].g = colorPtr[3 * i + 1];
+			film->film[i].b = colorPtr[3 * i + 2];
+		}
 	
+	}
+
 	void renderTile(unsigned int id_x, unsigned int id_y, Sampler& sample) {
 		int startX = id_x * TILE_SIZE;
 		int startY = id_y * TILE_SIZE;
 		int endX = min(startX + TILE_SIZE, film->width);
 		int endY = min(startY + TILE_SIZE, film->height);
-
 
 		for (unsigned int y = startY; y < endY; y++)
 		{
@@ -488,6 +736,22 @@ public:
 				film->tonemap(x, y, r, g, b);
 				canvas->draw(x, y, r, g, b);
 
+			}
+		}
+	}
+
+	void draw_final() {
+		for (unsigned int y = 0; y < film->height; y++)
+		{
+			for (unsigned int x = 0; x < film->width; x++)
+			{
+				int id = (y * film->width) + x;
+				Colour col = film->film[id];
+				unsigned char r = (unsigned char)(col.r * 255);
+				unsigned char g = (unsigned char)(col.g * 255);
+				unsigned char b = (unsigned char)(col.b * 255);
+				film->tonemap(x, y, r, g, b);
+				canvas->draw(x, y, r, g, b);
 			}
 		}
 	}
@@ -544,39 +808,15 @@ public:
 		}
 	}
 
-	void lightTracingRender() {
-		for (unsigned int y = 0; y < film->height; y++)
-		{
-			for (unsigned int x = 0; x < film->width; x++)
-			{
-				lightTrace(samplers[0]);
-			}
-		}
-		
-		for (unsigned int y = 0; y < film->height; y++)
-		{
-			for (unsigned int x = 0; x < film->width; x++)
-			{
-				int id = (y * film->width) + x;
-				Colour col = film->film[id];
-				unsigned char r = (unsigned char)(col.r * 255);
-				unsigned char g = (unsigned char)(col.g * 255);
-				unsigned char b = (unsigned char)(col.b * 255);
-				film->tonemap(x, y, r, g, b);
-				
-				canvas->draw(x, y, r, g, b);
-			}
-		}
-	}
-
 	void render()
 	{
 		film->incrementSPP(); 
+
 		//adaptiveRender();
 		//tileBasedRender();
 		//basicRender();
 		lightTracingRender();
-		
+		//instantRadiosity();
 	}
 
 	int getSPP()
