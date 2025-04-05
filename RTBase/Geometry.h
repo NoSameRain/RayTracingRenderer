@@ -449,7 +449,6 @@ public:
 				if (triangles[i].rayIntersect(ray, t, u, v)) {
 					if (t < maxT && t > 1e-4)
 					{
-						//std::cout << "invisible" << std::endl;
 						return false;
 					}
 				}

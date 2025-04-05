@@ -1,10 +1,14 @@
-#pragma once
+﻿#pragma once
 
 #include "Core.h"
 #include "Imaging.h"
 #include "Sampling.h"
 
 #pragma warning( disable : 4244)
+template <typename T>
+T clamp(T val, T minVal, T maxVal) {
+	return std::max(minVal, std::min(maxVal, val));
+}
 
 class BSDF;
 
@@ -55,11 +59,14 @@ public:
 		// ??? total internal reflection
 		float sinTheta_i = sqrtf(1 - SQ(cosTheta));
 		float sinTheta_t = ior * sinTheta_i;
-		float cosTheta_t = sqrtf(1 - SQ(sinTheta_t));
-		float ior2sin2 = SQ(ior) * (1 - SQ(cosTheta));
-		if (ior2sin2 > 1) return 1.0f;
 
-		// // Calculate refracted direction
+		float ior2sin2 = SQ(ior) * (1 - SQ(cosTheta));
+		if (ior2sin2 > 1.0f) return 1.0f; // TIR
+
+		float cosTheta_t = sqrtf(1 - SQ(sinTheta_t));
+		
+
+		// Calculate refracted direction
 		wt = Vec3(-ior * wolocal.x, -ior * wolocal.y, -cosTheta_t);
 
 		// Calculate Fresnel (|| and T)
@@ -67,7 +74,7 @@ public:
 		float Fpe = (ior * cosTheta - cosTheta_t) / (ior * cosTheta + ior * cosTheta_t); // Perpendicular
 		// return average^2
 		float average = (SQ(Fpa) + SQ(Fpe)) * 0.5f;
-		return average;
+		return clamp(average, 0.0f, 1.0f);
 	}
 	static Colour fresnelCondutor(float cosTheta, Colour ior, Colour k)
 	{
@@ -84,7 +91,6 @@ public:
 		return (Fpa2 + Fpe2) * 0.5f;
 	}
 };
-
 
 class BSDF
 {
@@ -109,7 +115,6 @@ public:
 	}
 	virtual float mask(const ShadingData& shadingData) = 0;
 };
-
 
 class DiffuseBSDF : public BSDF
 {
@@ -166,8 +171,8 @@ public:
 		Vec3 wolocal = shadingData.frame.toLocal(shadingData.wo);
 		Vec3 wi(-wolocal.x, -wolocal.y, wolocal.z);
 		pdf = 1.0f;
-		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / wi.z;
-		//reflectedColour = albedo->sample(shadingData.tu, shadingData.tv);
+		//reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / wi.z;
+		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv); // 
 		wi = shadingData.frame.toWorld(wi);
 		return wi;
 	}
@@ -195,8 +200,6 @@ public:
 		return albedo->sampleAlpha(shadingData.tu, shadingData.tv);
 	}
 };
-
-
 
 class ConductorBSDF : public BSDF
 {
@@ -262,32 +265,35 @@ public:
 	}
 	Vec3 sample(const ShadingData& shadingData, Sampler& sampler, Colour& reflectedColour, float& pdf)
 	{
-		// Add correct sampling code here
-		/*Vec3 wi = Vec3(0, 1, 0);
-		pdf = 1.0f;
-		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / M_PI;
-		wi = shadingData.frame.toWorld(wi);
-		return wi;*/
-
-
 		Vec3 wi, wt;
 		Vec3 wolocal = shadingData.frame.toLocal(shadingData.wo);
-		float cosTheta_i = Dot(shadingData.wo, shadingData.sNormal);
-		bool enter = (cosTheta_i > 0.0f);
+		float cosTheta_i = abs(wolocal.z);
+		bool enter = (wolocal.z > 0.0f);
 		float etaI = enter ? extIOR : intIOR;
 		float etaT = enter ? intIOR : extIOR;
 
 		float R = ShadingHelper::fresnelDielectric(cosTheta_i, etaI, etaT, wt, wolocal); //????????????????????
-		if (sampler.next() < R) { // reflection
+		if (!enter) wt.z = -wt.z; // fix output direction
+		//R = R + 0.1f; // some trick increase reflection probability
+		bool reflect = (R == 1.0f || sampler.next() < R);
+		//if(cosTheta_i < 0.1f) std::cout << "R: " << R << " | cosTheta: " << cosTheta_i << std::endl;
+		
+
+		if (reflect) { // reflection
 			wi = Vec3(-wolocal.x, -wolocal.y, wolocal.z);
 			pdf = R;
+			reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) * R ; 
+			//reflectedColour = Colour(1.0f, 0.0f, 0.0f); 
 		}
 		else { // refrection
 			wi = wt;
-			pdf = 1 - R;
+			pdf = 1.0f - R;
+			reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) * (1.0f - R);
+			//reflectedColour = Colour(0.0f, 0.0f, 1.0f); 
 		}
-		reflectedColour = albedo->sample(shadingData.tu, shadingData.tv) / wi.z;
+
 		wi = shadingData.frame.toWorld(wi);
+		//reflectedColour = Colour(R, R, R);
 		return wi;
 	}
 	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)

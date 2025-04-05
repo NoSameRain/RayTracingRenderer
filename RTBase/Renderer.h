@@ -277,7 +277,7 @@ public:
 
 	}
 	// ----------------------------------------light tracing ----------------------------------------------
-	void lightTracingRender() {
+	void lightTracer() {
 		// trace
 		for (unsigned int y = 0; y < film->height; y++)
 		{
@@ -440,7 +440,15 @@ public:
 			float pdf;
 			Vec3 wi = shadingData.bsdf->sample(shadingData, sampler, indirect, pdf);
 
-			pathThroughput = pathThroughput * indirect * fabsf(Dot(wi, shadingData.sNormal)) / pdf;
+			//pathThroughput = pathThroughput * indirect * fabsf(Dot(wi, shadingData.sNormal)) / pdf;
+			if (shadingData.bsdf->isPureSpecular()) {
+				// Glass or mirror, already weighted in sample()
+				pathThroughput = pathThroughput * indirect / pdf;
+			}
+			else {
+				pathThroughput = pathThroughput * indirect * fabsf(Dot(wi, shadingData.sNormal)) / pdf;
+			}
+
 
 			/*Colour bsdf;
 			float pdf;
@@ -771,7 +779,7 @@ public:
 		}
 	}
 	
-	void tileBasedRender() {
+	void pathTracerTileBased() {
 		for (unsigned int y = 0; y < tilesNumY; y++)
 			for (unsigned int x = 0; x < tilesNumX; x++) {
 				tileID.push({ x, y });
@@ -813,9 +821,9 @@ public:
 		film->incrementSPP(); 
 
 		//adaptiveRender();
-		//tileBasedRender();
+		pathTracerTileBased();
 		//basicRender();
-		lightTracingRender();
+		//lightTracer();
 		//instantRadiosity();
 	}
 
