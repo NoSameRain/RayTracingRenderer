@@ -321,7 +321,6 @@ public:
 	}
 };
 
-
 class DielectricBSDF : public BSDF
 {
 public:

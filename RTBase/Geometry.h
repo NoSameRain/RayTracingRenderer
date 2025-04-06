@@ -57,7 +57,7 @@ public:
 };
 
 //#define EPSILON 0.001f
-#define EPSILON 1e-12f
+#define EPSILON 1e-4f
 
 class Triangle
 {
@@ -409,7 +409,7 @@ public:
 			for (int i = startIndex; i < endIndex; i++) {
 				float t, u, v;
 				if (triangles[i].rayIntersect(ray, t, u, v)) {
-					if (t < intersection.t && t > 1e-4)
+					if (t < intersection.t && t > EPSILON)
 					{
 						intersection.t = t;  //update smallest t
 						intersection.ID = i;
@@ -440,17 +440,13 @@ public:
 		if (!bounds.rayAABB(ray, t)) {
 			return true;
 		}
-		// or p2-p1 length less than t
-		//if (t > maxT) return true;
 		// iterate all tris in this node
 		if (!l && !r) {
 			for (int i = startIndex; i < endIndex; i++) {
 				float t, u, v;
 				if (triangles[i].rayIntersect(ray, t, u, v)) {
-					if (t < maxT && t > 1e-4)
-					{
-						return false;
-					}
+					if (t >= maxT || t <= EPSILON) continue;// avoid self-Intersection
+					return false;
 				}
 			}
 			return true;

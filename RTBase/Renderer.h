@@ -21,7 +21,7 @@ const int MAX_DEPTH = 4;
 const int MAX_SAMPLES = 100000;
 const int MIN_SAMPLES = 1;
 const int INIT_SAMPLES = 4;
-
+const int MAX_VPL = 50; // max number of VPLs per pixel
 struct VPL 
 {
 	ShadingData shadingData;
@@ -92,7 +92,7 @@ public:
 		vpls.clear();
 		// first pass
 		// trace paths from the light and store VPLs at each interaction
-		traceVPLs(samplers[0], 50);
+		traceVPLs(samplers[0], MAX_VPL);
 		
 		// second pass
 		// iterate all pixels (mult-threads) and trace a path from cam to first non-specular vertex
@@ -108,7 +108,7 @@ public:
 		for (auto& th : threads_ir) {
 			th.join();
 		}
-		
+		//renderBlockinstantRadiosity(0, film->height, samplers[0]);
 		// draw
 		for (unsigned int y = 0; y < film->height; y++)
 		{
@@ -135,8 +135,9 @@ public:
 			// intersection to vpl??????????????????????????????????????????????????????????????
 			Vec3 direction = vpl.shadingData.x - shadingData.x; 
 			float dist2 = direction.lengthSq();
-			if (dist2 < 1e-12f) {
-				//continue;
+			//dist2 = max(dist2, 1e-6f); // avoid division by zero
+			if (dist2 < 1e-4f) {
+				continue;
 			}
 			direction = direction.normalize();
 
@@ -225,57 +226,7 @@ public:
 		}
 		return;
 	}
-	Colour computeDirect(ShadingData shadingData, Sampler& sampler)
-	{
-		// Is surface is specular we cannot computing direct lighting
-
-		if (shadingData.bsdf->isPureSpecular() == true)
-		{
-			return Colour(0.0f, 0.0f, 0.0f);
-		}
-		// Sample a light
-		float pmf;
-		Light* light = scene->sampleLight(sampler, pmf);
-		// Sample a point on the light
-		float pdf;
-		Colour emitted;
-
-		Vec3 p = light->sample(shadingData, sampler, emitted, pdf);
-		if (light->isArea())
-		{
-			// Calculate GTerm
-			Vec3 wi = p - shadingData.x;
-			float l = wi.lengthSq();
-			wi = wi.normalize();
-			float GTerm = (max(Dot(wi, shadingData.sNormal), 0.0f) * max(-Dot(wi, light->normal(shadingData, wi)), 0.0f)) / l;
-			if (GTerm > 0)
-			{
-				// Trace
-				if (scene->visible(shadingData.x, p))
-				{
-					// Shade
-					return shadingData.bsdf->evaluate(shadingData, wi) * emitted * GTerm / (pmf * pdf);
-				}
-			}
-		}
-		else
-		{
-			// Calculate GTerm
-			Vec3 wi = p;
-			float GTerm = max(Dot(wi, shadingData.sNormal), 0.0f);
-			if (GTerm > 0)
-			{
-				// Trace
-				if (scene->visible(shadingData.x, shadingData.x + (p * 10000.0f)))
-				{
-					// Shade DirectIllum=BSDF × Emission × G × Visibility.
-					return shadingData.bsdf->evaluate(shadingData, wi) * emitted * GTerm / (pmf * pdf);
-				}
-			}
-		}
-		return Colour(0.0f, 0.0f, 0.0f);
-
-	}
+	
 	// ----------------------------------------light tracing ----------------------------------------------
 	void lightTracer() {
 		// trace
@@ -286,8 +237,7 @@ public:
 				lightTrace(samplers[0]);
 			}
 		}
-		// denoise
-		denoise();
+		//denoise();
 		// draw
 		for (unsigned int y = 0; y < film->height; y++)
 		{
@@ -419,7 +369,7 @@ public:
 				}
 			}
 			// sample light ------------------------------------------------------------------------------------
-			Colour direct = pathThroughput * computeDirect(shadingData, sampler);
+			Colour direct = pathThroughput * computeDirectMIS(shadingData, sampler);
 
 			// sample BSDF ------------------------------------------------------------------------------------
 			if (depth > MAX_DEPTH)
@@ -477,9 +427,159 @@ public:
 			{
 				return shadingData.bsdf->emit(shadingData, shadingData.wo);
 			}
-			return computeDirect(shadingData, sampler);
+			return computeDirectMIS(shadingData, sampler);
 		}
 		return Colour(0.0f, 0.0f, 0.0f);
+	}
+	float balanceHeuristic(float pdfA, float pdfB) {
+		return pdfA / (pdfA + pdfB);
+	}
+	float convertPDFAreaToSolidAngle(float pdfArea, float dist2, float costheta) {
+		// Convert area PDF to solid angle PDF
+		if (costheta > 0.0f)
+		{
+			return pdfArea * dist2 / costheta;
+		}
+		else
+		{
+			return 0.0f;
+		}
+
+	}
+	Colour computeDirect(ShadingData shadingData, Sampler& sampler)
+	{
+		// Is surface is specular we cannot computing direct lighting
+
+		if (shadingData.bsdf->isPureSpecular() == true)
+		{
+			return Colour(0.0f, 0.0f, 0.0f);
+		}
+		// Sample a light
+		float pmf;
+		Light* light = scene->sampleLight(sampler, pmf);
+		// Sample a point on the light
+		float pdf;
+		Colour emitted;
+
+		Vec3 p = light->sample(shadingData, sampler, emitted, pdf);
+		if (light->isArea())
+		{
+			// Calculate GTerm
+			Vec3 wi = p - shadingData.x;
+			float l = wi.lengthSq();
+			wi = wi.normalize();
+			float GTerm = (max(Dot(wi, shadingData.sNormal), 0.0f) * max(-Dot(wi, light->normal(shadingData, wi)), 0.0f)) / l;
+			if (GTerm > 0)
+			{
+				// Trace
+				if (scene->visible(shadingData.x, p))
+				{
+					// Shade
+					return shadingData.bsdf->evaluate(shadingData, wi) * emitted * GTerm / (pmf * pdf);
+				}
+			}
+		}
+		else
+		{
+			// Calculate GTerm
+			Vec3 wi = p;
+			float GTerm = max(Dot(wi, shadingData.sNormal), 0.0f);
+			if (GTerm > 0)
+			{
+				// Trace
+				if (scene->visible(shadingData.x, shadingData.x + (p * 10000.0f)))
+				{
+					// Shade DirectIllum=BSDF × Emission × G × Visibility.
+					return shadingData.bsdf->evaluate(shadingData, wi) * emitted * GTerm / (pmf * pdf);
+				}
+			}
+		}
+		return Colour(0.0f, 0.0f, 0.0f);
+
+	}
+	Colour computeDirectMIS(ShadingData shadingData, Sampler& sampler)
+	{
+		// Is surface is specular we cannot computing direct lighting
+
+		if (shadingData.bsdf->isPureSpecular() == true)
+		{
+			return Colour(0.0f, 0.0f, 0.0f);
+		}
+		Colour result(0.0f, 0.0f, 0.0f);
+		// -------------------------------------Sample a light--------------------------------------------
+		float pmf;
+		Light* light = scene->sampleLight(sampler, pmf);
+		// Sample a point on the light
+		float pdf;
+		Colour emitted;
+
+		Vec3 p = light->sample(shadingData, sampler, emitted, pdf);
+		if (light->isArea())
+		{
+			// Calculate GTerm
+			Vec3 wi = p - shadingData.x;
+			float l = wi.lengthSq();
+			wi = wi.normalize();
+			float cos_surface = max(Dot(wi, shadingData.sNormal), 0.0f);
+			float cos_light = max(-Dot(wi, light->normal(shadingData, wi)), 0.0f);
+			float GTerm = cos_surface * cos_light / l;
+			if (GTerm > 0)
+			{
+				// Trace
+				if (scene->visible(shadingData.x, p))
+				{
+					// sample BSDF in the same direction
+					float pdfBSDF = shadingData.bsdf->PDF(shadingData, wi);
+					float pdfLightSolid = convertPDFAreaToSolidAngle(pdf*pmf, l, cos_light);
+					// MIS
+					float weight = balanceHeuristic(pdfLightSolid, pdfBSDF);
+					// Shade
+					result = result + shadingData.bsdf->evaluate(shadingData, wi) * emitted * GTerm * weight / (pmf * pdf);
+				}
+			}
+		}
+		else
+		{
+			// Calculate GTerm
+			Vec3 wi = p;
+			float GTerm = max(Dot(wi, shadingData.sNormal), 0.0f);
+			if (GTerm > 0)
+			{
+				// Trace
+				if (scene->visible(shadingData.x, shadingData.x + (p * 10000.0f)))
+				{
+					// Shade DirectIllum=BSDF × Emission × G × Visibility.
+					return shadingData.bsdf->evaluate(shadingData, wi) * emitted * GTerm / (pmf * pdf);
+				}
+			}
+		}
+		// -------------------------------------Sample BSDF--------------------------------------------
+		Colour val_bsdf;
+		float pdf_bsdf;
+		Vec3 wi_bsdf = shadingData.bsdf->sample(shadingData, sampler, val_bsdf, pdf_bsdf);
+
+		Ray r = Ray(shadingData.x + (wi_bsdf*EPSILON), wi_bsdf); // generate a ray from the intersection point with direction wi_bsdf
+		IntersectionData intersection = scene->traverse(r);
+		ShadingData shadingData_hitLight = scene->calculateShadingData(intersection, r);
+		if (shadingData_hitLight.t < FLT_MAX)
+		{
+			if (shadingData_hitLight.bsdf->isLight())  // if the hit surface is a light
+			{
+				Colour emitted2 = shadingData_hitLight.bsdf->emit(shadingData_hitLight, -wi_bsdf);
+				Vec3 hitLightPoint = shadingData_hitLight.x;
+				Vec3 wi = hitLightPoint - shadingData.x; // from shading point to hit point
+				float dist2 = wi.lengthSq();
+				wi = wi.normalize();
+				float cos_light = max(0.0f, Dot(-wi, shadingData_hitLight.sNormal)); // from shading point to hit point
+				float pdf_lightSolid = convertPDFAreaToSolidAngle(pdf * pmf, dist2, cos_light);;
+				float weight = balanceHeuristic(pdf_bsdf, pdf_lightSolid);
+
+				result = result + val_bsdf * emitted2 * max(0.0f, Dot(wi_bsdf, shadingData.sNormal)) * weight / pdf_bsdf;
+			}
+		}
+
+		return result;
+
 	}
 	Colour albedo(Ray& r)
 	{
