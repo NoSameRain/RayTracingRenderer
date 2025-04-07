@@ -54,17 +54,16 @@ public:
 	}
 	static float fresnelDielectric(float cosTheta, float iorInt, float iorExt, Vec3& wt, Vec3 wolocal)
 	{
-
 		float ior = iorInt / iorExt;
-		// ??? total internal reflection
+		
 		float sinTheta_i = sqrtf(1 - SQ(cosTheta));
 		float sinTheta_t = ior * sinTheta_i;
 
 		float ior2sin2 = SQ(ior) * (1 - SQ(cosTheta));
-		if (ior2sin2 > 1.0f) return 1.0f; // TIR
+		// total internal reflection
+		if (ior2sin2 > 1.0f) return 1.0f; 
 
 		float cosTheta_t = sqrtf(1 - SQ(sinTheta_t));
-		
 
 		// Calculate refracted direction
 		wt = Vec3(-ior * wolocal.x, -ior * wolocal.y, -cosTheta_t);
@@ -272,12 +271,10 @@ public:
 		float etaI = enter ? extIOR : intIOR;
 		float etaT = enter ? intIOR : extIOR;
 
-		float R = ShadingHelper::fresnelDielectric(cosTheta_i, etaI, etaT, wt, wolocal); //????????????????????
+		float R = ShadingHelper::fresnelDielectric(cosTheta_i, etaI, etaT, wt, wolocal); 
 		if (!enter) wt.z = -wt.z; // fix output direction
-		//R = R + 0.1f; // some trick increase reflection probability
+		//R = R + 0.2f; // some trick increase reflection probability
 		bool reflect = (R == 1.0f || sampler.next() < R);
-		//if(cosTheta_i < 0.1f) std::cout << "R: " << R << " | cosTheta: " << cosTheta_i << std::endl;
-		
 
 		if (reflect) { // reflection
 			wi = Vec3(-wolocal.x, -wolocal.y, wolocal.z);
@@ -293,7 +290,6 @@ public:
 		}
 
 		wi = shadingData.frame.toWorld(wi);
-		//reflectedColour = Colour(R, R, R);
 		return wi;
 	}
 	Colour evaluate(const ShadingData& shadingData, const Vec3& wi)

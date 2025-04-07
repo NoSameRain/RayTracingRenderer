@@ -18,9 +18,9 @@
 const int TILE_SIZE = 32;
 std::mutex tileIDMutex, varianceMutex;
 const int MAX_DEPTH = 4; 
-const int MAX_SAMPLES = 100000;
+const int MAX_SAMPLES = 10240;
 const int MIN_SAMPLES = 1;
-const int INIT_SAMPLES = 4;
+const int INIT_SAMPLES = 2;
 const int MAX_VPL = 50; // max number of VPLs per pixel
 struct VPL 
 {
@@ -59,7 +59,6 @@ public:
 		totalTiles = tilesNumX * tilesNumY;
 		tileVariances = std::vector<float>(totalTiles, 0.0f);
 		tileWeights = std::vector<float>(totalTiles, 0.0f);
-
 		clear();
 	}
 	void clear()
@@ -67,6 +66,18 @@ public:
 		film->clear();
 	}
 
+	void presentFilmToCanvas() {
+		for (unsigned int y = 0; y < film->height; y++) {
+			for (unsigned int x = 0; x < film->width; x++) {
+				Colour col = film->film[y * film->width + x];
+				unsigned char r = (unsigned char)(col.r * 255);
+				unsigned char g = (unsigned char)(col.g * 255);
+				unsigned char b = (unsigned char)(col.b * 255);
+				film->tonemap(x, y, r, g, b);      
+				canvas->draw(x, y, r, g, b);       
+			}
+		}
+	}
 	// ----------------------------------------instant radiosity ----------------------------------------------
 	void renderBlockinstantRadiosity(int start, int end, Sampler& sampler) {
 		for (unsigned int y = start; y < end; y++)
@@ -77,12 +88,12 @@ public:
 				float py = y + 0.5f;
 				Ray r = scene->camera.generateRay(px, py);
 				int bounce = 0;
-				// find first non-specular vertex????????????????????????????????????????????????????????????????
+				// find first non-specular vertex?
 				IntersectionData intersection = scene->traverse(r);
 				ShadingData shadingData = scene->calculateShadingData(intersection, r);
-
+				// compute direct lighting from each VPL
 				if (shadingData.t < FLT_MAX) {
-					Colour col = computeVPLsContribution(shadingData); //???????????????????????????????????????????????????????????????
+					Colour col = computeVPLsContribution(shadingData); 
 					film->splat(x, y, col);
 				}
 			}
@@ -90,12 +101,12 @@ public:
 	}
 	void instantRadiosity() {
 		vpls.clear();
-		// first pass
+		// -------first pass---------
 		// trace paths from the light and store VPLs at each interaction
 		traceVPLs(samplers[0], MAX_VPL);
 		
-		// second pass
-		// iterate all pixels (mult-threads) and trace a path from cam to first non-specular vertex
+		// -------second pass--------
+		// iterate all blocks (mult-threads) and trace a path from cam to first non-specular vertex
 		std::vector<std::thread> threads_ir;
 		int height = film->height;
 		int blockSize = height / numProcs;
@@ -108,21 +119,8 @@ public:
 		for (auto& th : threads_ir) {
 			th.join();
 		}
-		//renderBlockinstantRadiosity(0, film->height, samplers[0]);
-		// draw
-		for (unsigned int y = 0; y < film->height; y++)
-		{
-			for (unsigned int x = 0; x < film->width; x++)
-			{
-				int id = (y * film->width) + x;
-				Colour col = film->film[id];
-				unsigned char r = (unsigned char)(col.r * 255);
-				unsigned char g = (unsigned char)(col.g * 255);
-				unsigned char b = (unsigned char)(col.b * 255);
-				film->tonemap(x, y, r, g, b);
-				canvas->draw(x, y, r, g, b);
-			}
-		}
+		// ---------draw------------
+		presentFilmToCanvas();
 	}
 	// ditrct
 	Colour computeVPLsContribution(ShadingData shadingData) {
@@ -132,22 +130,19 @@ public:
 		
 		Colour col_sum(0.0f, 0.0f, 0.0f);
 		for (auto& vpl : vpls) {
-			// intersection to vpl??????????????????????????????????????????????????????????????
+			// direction from intersection to vpl
 			Vec3 direction = vpl.shadingData.x - shadingData.x; 
 			float dist2 = direction.lengthSq();
-			//dist2 = max(dist2, 1e-6f); // avoid division by zero
 			if (dist2 < 1e-4f) {
 				continue;
 			}
 			direction = direction.normalize();
-
+			// cos term of vpl and shading point
 			float cos_theta_vpl = Dot(vpl.shadingData.sNormal, -direction);
 			float cos_theta_x = Dot(shadingData.sNormal, direction);
-
 			// G term
 			if (cos_theta_vpl <= 0.0f || cos_theta_x <= 0.0f) continue;
 			float G = (cos_theta_vpl * cos_theta_x) / dist2;
-
 			// Visible
 			if (!scene->visible(shadingData.x, vpl.shadingData.x))
 				continue;
@@ -155,12 +150,6 @@ public:
 			// color * bsdf * G term
 			Colour bsdf;
 			bsdf = shadingData.bsdf->evaluate(shadingData, direction);
-			//if (vpl.isLight) { // vpl on light
-			//	bsdf = shadingData.bsdf->evaluate(shadingData, direction);
-			//}
-			//else { // vpl on surface
-			//	bsdf = shadingData.bsdf->evaluate(vpl.shadingData, -direction) * shadingData.bsdf->evaluate(shadingData, direction);
-			//}
 			Colour col = vpl.Le * bsdf * G;
 			col_sum = col_sum + col;
 		}
@@ -175,15 +164,15 @@ public:
 				float pdfPosition, pdfDirection;
 				Vec3 p = light->samplePositionFromLight(sampler, pdfPosition);
 				Vec3 wi = light->sampleDirectionFromLight(sampler, pdfDirection);
-				// VPL on light source
+				// store VPL on light source
 				VPL vpl;
 				ShadingData tmp;
-				//vpl.isLight = true;
 				vpl.shadingData = ShadingData(p, light->normal(tmp, p));
-				vpl.Le = light->evaluate(-wi) / (pmf * pdfPosition * (float)N_VPLs); // ???????
+				vpl.Le = light->evaluate(-wi) / (pmf * pdfPosition * (float)N_VPLs); 
 				vpls.push_back(vpl);
-
+				// emitted
 				Colour Le = light->evaluate(-wi) * Dot(wi, light->normal(tmp, p)) / (pmf * pdfPosition  * (float)N_VPLs); // ????????
+				// generate ray from light sample
 				Ray r = Ray(p, wi);
 				Colour pathThroughput(1.0f, 1.0f, 1.0f);
 				// trace VPL path
@@ -194,14 +183,15 @@ public:
 	void VPLTracePath(Ray& r, Colour pathThroughput, Colour Le, Sampler& sampler) {
 		IntersectionData intersection = scene->traverse(r);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
-
+		// only store VPLs for non-specular surfaces
 		if (shadingData.t < FLT_MAX) {
 			if (!shadingData.bsdf->isLight() && !shadingData.bsdf->isPureSpecular())
 			{
 				// -------------store-------------------
 				VPL vpl;
 				vpl.shadingData = shadingData;
-				vpl.Le = pathThroughput * Le;
+				//vpl.Le = pathThroughput * Le;
+				vpl.Le = pathThroughput * Le * shadingData.bsdf->evaluate(shadingData, -r.dir) * fabsf(Dot(-r.dir, shadingData.sNormal));
 				vpls.push_back(vpl);
 			}
 			float russianRouletteProbability = min(pathThroughput.Lum(), 0.9f);
@@ -219,9 +209,9 @@ public:
 			Vec3 wi = shadingData.bsdf->sample(shadingData, sampler, bsdfVal, pdf);
 
 			pathThroughput = pathThroughput * bsdfVal * fabsf(Dot(wi, shadingData.sNormal)) / pdf;
-
+			// spawn the next ray in the path
 			r.init(shadingData.x + (wi * EPSILON), wi);
-
+			// recursively trace the next bounce
 			VPLTracePath(r, pathThroughput, Le, sampler);
 		}
 		return;
@@ -234,58 +224,40 @@ public:
 		{
 			for (unsigned int x = 0; x < film->width; x++)
 			{
-				lightTrace(samplers[0]);
+				lightTrace_init(samplers[0]);
 			}
 		}
 		//denoise();
 		// draw
-		for (unsigned int y = 0; y < film->height; y++)
-		{
-			for (unsigned int x = 0; x < film->width; x++)
-			{
-				int id = (y * film->width) + x;
-				Colour col = film->film[id];
-				unsigned char r = (unsigned char)(col.r * 255);
-				unsigned char g = (unsigned char)(col.g * 255);
-				unsigned char b = (unsigned char)(col.b * 255);
-				film->tonemap(x, y, r, g, b);
-
-				canvas->draw(x, y, r, g, b);
-			}
-		}
+		presentFilmToCanvas();
 	}
 	void connectToCamera(Vec3 p, Vec3 n, Colour col)
 	{
 		float x, y;
+		// attempt to project the point p onto the camera plane as (x,y)
 		if (scene->camera.projectOntoCamera(p, x, y)) {
 			float A_film = scene->camera.Afilm;
-			Vec3 direction = scene->camera.origin - p; // p to cam
+			// compute direction from "point to be projected" to camera
+			Vec3 direction = scene->camera.origin - p; 
 			float dist2 = direction.lengthSq();
 			direction = direction.normalize();
-
+			// compute cosine for point side and camera side
 			float cos_theta_shading = Dot(n, direction);
 			float cos_theta_cam = Dot(scene->camera.viewDirection, -direction);
-
 			// G term
-			/*float G = (max(cos_theta_shading, 0.0f) * max(-cos_theta_cam, 0.0f)) / dist2;
-			if (G < 0.0f)
-				return;*/
 			if (cos_theta_shading < 0.0f || cos_theta_cam < 0.0f) return;
 			float G = (cos_theta_shading * cos_theta_cam) / dist2;
-
+			// visible check
 			if (!scene->visible(p, scene->camera.origin))
 				return;
-
-			//float G = max(cos_theta_shading, 0.0f) / dist2;
-			// 
-			// importance  term
+			// importance term
 			float W_e = 1 / (A_film * SQ(SQ(cos_theta_cam)));
 			// color * importance term * G term
 			Colour color = col * W_e * G;
 			film->splat(x, y, color);
 		}
 	}
-	void lightTrace(Sampler& sampler)
+	void lightTrace_init(Sampler& sampler)
 	{
 		// Sample a light
 		float pmf;
@@ -295,18 +267,20 @@ public:
 			// Sample a point on the light
 			float pdfPosition, pdfDirection;
 			Vec3 p = light->samplePositionFromLight(sampler, pdfPosition);
+			// sample a direction from the light
 			Vec3 wi = light->sampleDirectionFromLight(sampler, pdfDirection);	
 			
 			ShadingData tmp;
 			Vec3 lightNormal = light->normal(tmp, wi);
 			float cosTheta = Dot(lightNormal, wi);
-			
+			// evaluate the radiance from light sample
 			Colour Le = light->evaluate(-wi) * cosTheta/ (pmf * pdfDirection * pdfPosition);
-
+			// connect light sample directly to the camera
 			connectToCamera(p, lightNormal, Le);
-
+			// spawn a ray from the light sample
 			Ray r = Ray(p, wi);
 			Colour pathThroughput(1.0f, 1.0f, 1.0f);
+			// recursive light tracing
 			lightTracePath(r, pathThroughput, Le, sampler);
 		}
 	}
@@ -314,7 +288,7 @@ public:
 	{
 		IntersectionData intersection = scene->traverse(r);
 		ShadingData shadingData = scene->calculateShadingData(intersection, r);
-		
+		// if ray hits  
 		if (shadingData.t < FLT_MAX ) {
 			if (shadingData.bsdf->isLight() || shadingData.bsdf->isPureSpecular())
 			{
@@ -325,9 +299,9 @@ public:
 			wi = wi.normalize();
 			// the contribution for connecting the intersection to the camera
 			Colour col = pathThroughput * shadingData.bsdf->evaluate(shadingData, wi) * Le;
-
-			connectToCamera(shadingData.x, shadingData.sNormal, col); //??????????????
-			
+			// connect the intersection to the camera
+			connectToCamera(shadingData.x, shadingData.sNormal, col); 
+			// to limit path length
 			float russianRouletteProbability = min(pathThroughput.Lum(), 0.9f);
 			if (sampler.next() < russianRouletteProbability)
 			{
@@ -341,11 +315,11 @@ public:
 			Colour indirect;
 			float pdf;
 			Vec3 wi2 = shadingData.bsdf->sample(shadingData, sampler, indirect, pdf);
-
+			// update the path throughput
 			pathThroughput = pathThroughput * indirect * fabsf(Dot(wi2, shadingData.sNormal)) / pdf;
-
+			// spawn a ray from the intersection
 			r.init(shadingData.x + (wi2 * EPSILON), wi2);
-
+			// recursively trace next bounce
 			lightTracePath(r, pathThroughput, Le, sampler);
 		}
 		return;
@@ -369,7 +343,7 @@ public:
 				}
 			}
 			// sample light ------------------------------------------------------------------------------------
-			Colour direct = pathThroughput * computeDirectMIS(shadingData, sampler);
+			Colour direct = pathThroughput * computeDirect(shadingData, sampler);
 
 			// sample BSDF ------------------------------------------------------------------------------------
 			if (depth > MAX_DEPTH)
@@ -427,7 +401,7 @@ public:
 			{
 				return shadingData.bsdf->emit(shadingData, shadingData.wo);
 			}
-			return computeDirectMIS(shadingData, sampler);
+			return computeDirect(shadingData, sampler);
 		}
 		return Colour(0.0f, 0.0f, 0.0f);
 	}
@@ -606,172 +580,173 @@ public:
 		return Colour(0.0f, 0.0f, 0.0f);
 	}
 	
-	//void adaptiveSampling(unsigned int id_x, unsigned int id_y, unsigned int tileIndex) {
-	//	int startX = id_x * TILE_SIZE;
-	//	int startY = id_y * TILE_SIZE;
-	//	int endX = min(startX + TILE_SIZE, film->width);
-	//	int endY = min(startY + TILE_SIZE, film->height);
-	//	int blockSize = (endX - startX) * (endY - startY);
+	void adaptiveSampling(unsigned int id_x, unsigned int id_y, unsigned int tileIndex, unsigned int id_thread) {
+		int startX = id_x * TILE_SIZE;
+		int startY = id_y * TILE_SIZE;
+		int endX = min(startX + TILE_SIZE, film->width);
+		int endY = min(startY + TILE_SIZE, film->height);
+		int blockSize = (endX - startX) * (endY - startY);
 
-	//	// adaptive sampling
-	//	std::vector<Colour> blockEstimatedValues(blockSize, Colour(0.0f,0.0f,0.0f));
+		// adaptive sampling
+		std::vector<Colour> blockEstimatedValues(blockSize, Colour(0.0f,0.0f,0.0f));
 
-	//	// 1 render img at low spp - calculate estimated values for each pixel in a block
-	//	int pixelIndex = 0;
-	//	for (unsigned int y = startY; y < endY; y++)
-	//	{
-	//		for (unsigned int x = startX; x < endX; x++)
-	//		{
-	//			Colour estimatedValue;
-	//			Colour sum_init(0.0f, 0.0f, 0.0f);
+		// 1 render img at low spp - calculate estimated values for each pixel in a block
+		int pixelIndex = 0;
+		for (unsigned int y = startY; y < endY; y++)
+		{
+			for (unsigned int x = startX; x < endX; x++)
+			{
+				Colour estimatedValue;
+				Colour sum_init(0.0f, 0.0f, 0.0f);
 
-	//			// initial sampling
-	//			for (unsigned int i = 0; i < INIT_SAMPLES; i++) {
-	//				// Pick a point in the pixel (e.g. pixel centre)
-	//				float px = x + 0.5f;
-	//				float py = y + 0.5f;
-	//				Ray ray = scene->camera.generateRay(px, py);
-	//				Colour pathThroughput(1.0f, 1.0f, 1.0f);
-	//				Colour col = pathTrace(ray, pathThroughput, 0, samplers);
+				// initial sampling
+				for (unsigned int i = 0; i < INIT_SAMPLES; i++) {
+					// Pick a point in the pixel (e.g. pixel centre)
+					float px = x + 0.5f;
+					float py = y + 0.5f;
+					Ray ray = scene->camera.generateRay(px, py);
+					Colour pathThroughput(1.0f, 1.0f, 1.0f);
+					//std::cout << "thread: " << id_thread  << std::endl;
+					Colour col = pathTrace(ray, pathThroughput, 0, samplers[id_thread]);
 
-	//				sum_init = sum_init + col;
-	//			}
-	//			estimatedValue = sum_init / (float)INIT_SAMPLES;
-	//			//blockEstimatedValues.push_back(estimatedValue);
-	//			blockEstimatedValues[pixelIndex] = estimatedValue;
-	//			pixelIndex++;
-	//		}
-	//	}
-	//	// 2 calculate ground truth using mean over region
-	//	Colour estimated_sum(0.0f, 0.0f, 0.0f);
-	//	for (int i = 0; i < blockEstimatedValues.size(); i++) {
-	//		estimated_sum = estimated_sum + blockEstimatedValues[i];
-	//	}
-	//	Colour groundTruth = estimated_sum / (float)pixelIndex;
+					sum_init = sum_init + col;
+				}
+				estimatedValue = sum_init / (float)INIT_SAMPLES;
+				//blockEstimatedValues.push_back(estimatedValue);
+				blockEstimatedValues[pixelIndex] = estimatedValue;
+				pixelIndex++;
+			}
+		}
+		// 2 calculate ground truth using mean over region
+		Colour estimated_sum(0.0f, 0.0f, 0.0f);
+		for (int i = 0; i < blockEstimatedValues.size(); i++) {
+			estimated_sum = estimated_sum + blockEstimatedValues[i];
+		}
+		Colour groundTruth = estimated_sum / (float)pixelIndex;
 
-	//	// 3 calculate variance per block
-	//	Colour sum(0.0f, 0.0f, 0.0f);
-	//	for (int i = 0; i < blockEstimatedValues.size(); i++) {
-	//		Colour tmp = blockEstimatedValues[i] - groundTruth;
-	//		sum = sum + tmp * tmp;
-	//	}
-	//	float variance = ((sum.r + sum.g + sum.b) / 3.0f) / (float)(pixelIndex - 1);
+		// 3 calculate variance per block
+		Colour sum(0.0f, 0.0f, 0.0f);
+		for (int i = 0; i < blockEstimatedValues.size(); i++) {
+			Colour tmp = blockEstimatedValues[i] - groundTruth;
+			sum = sum + tmp * tmp;
+		}
+		float variance = ((sum.r + sum.g + sum.b) / 3.0f) / (float)(pixelIndex - 1);
 
-	//	// 4 store var per block
-	//	{
-	//		std::lock_guard<std::mutex> lock(varianceMutex);
-	//		tileVariances[tileIndex] = variance;
-	//	}
+		// 4 store var per block
+		{
+			std::lock_guard<std::mutex> lock(varianceMutex);
+			tileVariances[tileIndex] = variance;
+		}
 
-	//}
-	//
-	//void renderTileWithSample(unsigned int id_x, unsigned int id_y, unsigned int tileIndex) {
-	//	int startX = id_x * TILE_SIZE;
-	//	int startY = id_y * TILE_SIZE;
-	//	int endX = min(startX + TILE_SIZE, film->width);
-	//	int endY = min(startY + TILE_SIZE, film->height);
-	//	int sample = (int)(tileWeights[tileIndex] * MAX_SAMPLES);
-	//	if (sample < MIN_SAMPLES) sample = MIN_SAMPLES;
+	}
+	
+	void sampleTileWithWeight(unsigned int id_x, unsigned int id_y, unsigned int tileIndex, unsigned int id_thread) {
+		int startX = id_x * TILE_SIZE;
+		int startY = id_y * TILE_SIZE;
+		int endX = min(startX + TILE_SIZE, film->width);
+		int endY = min(startY + TILE_SIZE, film->height);
+		
+		float weight = tileWeights[tileIndex];
+		weight = sqrt(weight);
+		//weight = weight / (weight + 1.0f);  // make higher variance more stable
+		int sample = (int)(weight * MAX_SAMPLES);
+		sample = max(sample, MIN_SAMPLES);
 
-	//	//std::cout << "sample: " << sample << std::endl;
+		std::cout << "sample: " << sample << std::endl;
+		//std::cout << "weight: " << weight << std::endl;
 
-	//	for (unsigned int y = startY; y < endY; y++)
-	//	{
-	//		for (unsigned int x = startX; x < endX; x++)
-	//		{
-	//			// Pick a point in the pixel (e.g. pixel centre)
-	//			float px = x + 0.5f;
-	//			float py = y + 0.5f;
-	//			Colour col(0.0f,0.0f,0.0f);
+		for (unsigned int y = startY; y < endY; y++)
+		{
+			for (unsigned int x = startX; x < endX; x++)
+			{
+				// Pick a point in the pixel (e.g. pixel centre)
+				float px = x + 0.5f;
+				float py = y + 0.5f;
+				Colour col(0.0f,0.0f,0.0f);
 
-	//			for (unsigned int i = 0; i < sample; i++) {
-	//				
-	//				Ray ray = scene->camera.generateRay(px, py);
-	//				//Colour col = viewNormals(ray);
-	//				//Colour col = albedo(ray);
-	//				//Colour col = direct(ray, samplers);
-	//				Colour pathThroughput(1.0f, 1.0f, 1.0f);
-	//				col = col + pathTrace(ray, pathThroughput, 0, samplers);
-	//			}
-	//			col = col / (float)sample;
-	//			film->splat(px, py, col);
-	//			unsigned char r = (unsigned char)(col.r * 255);
-	//			unsigned char g = (unsigned char)(col.g * 255);
-	//			unsigned char b = (unsigned char)(col.b * 255);
-	//			film->tonemap(x, y, r, g, b);
-	//			canvas->draw(x, y, r, g, b);
-	//		}
-	//	}
-	//}
-	//
-	//void adaptiveRender() {
-	//	// init tile ID queue (0,0) (1,0) ... (X-1, Y-1)
-	//	for (unsigned int y = 0; y < tilesNumY; y++)
-	//		for (unsigned int x = 0; x < tilesNumX; x++) {
-	//			tileID.push({ x, y });
-	//		}
-	//	// --------------SAMPLE---------------------------------------------------------
-	//	std::vector<std::thread> threads_sample;
+				for (unsigned int i = 0; i < sample; i++) {
+					
+					Ray ray = scene->camera.generateRay(px, py);
+					Colour pathThroughput(1.0f, 1.0f, 1.0f);
+					col = col + pathTrace(ray, pathThroughput, 0, samplers[id_thread]);
+				}
+				col = col / (float)sample;
+				film->splat(px, py, col);
+			}
+		}
+	}
+	
+	void adaptiveRender() {
+		// init tile ID queue (0,0) (1,0) ... (X-1, Y-1)
+		for (unsigned int y = 0; y < tilesNumY; y++)
+			for (unsigned int x = 0; x < tilesNumX; x++) {
+				tileID.push({ x, y });
+			}
+		// --------------SAMPLE-------------------
+		std::vector<std::thread> threads_sample;
 
-	//	for (unsigned int i = 0; i < numProcs; i++) {
-	//		threads_sample.emplace_back([&]() {
-	//			while (true) { // get tile id
-	//				unsigned int x, y;
-	//				{
-	//					std::lock_guard<std::mutex> lock(tileIDMutex);
-	//					if (tileID.empty()) break;
-	//					x = tileID.front().first;
-	//					y = tileID.front().second;
-	//					tileID.pop();
-	//				}
-	//				// calculate index of current tile
-	//				unsigned int tileIndex = y * tilesNumX + x;
-	//				adaptiveSampling(x, y, tileIndex);
-	//			}
-	//			});
-	//	}
-	//	for (auto& t : threads_sample) {
-	//		t.join();
-	//	}
+		for (unsigned int i = 0; i < numProcs; i++) {
+			threads_sample.emplace_back([this, i]() {
+				while (true) { // get tile id
+					unsigned int x, y;
+					{
+						std::lock_guard<std::mutex> lock(tileIDMutex);
+						if (tileID.empty()) break;
+						x = tileID.front().first;
+						y = tileID.front().second;
+						tileID.pop();
+					}
+					// calculate index of current tile
+					unsigned int tileIndex = y * tilesNumX + x;
+					adaptiveSampling(x, y, tileIndex, i);
+				}
+				});
+		}
+		for (auto& t : threads_sample) {
+			t.join();
+		}
 
-	//	// calculate total variance for all tiles
-	//	float totalVariance = 0.0f;
-	//	for (float v : tileVariances)
-	//		totalVariance += v;
+		// calculate total variance for all tiles
+		float totalVariance = 0.0f;
+		for (float v : tileVariances)
+			totalVariance += v;
 
-	//	// calculate weights for each tile
-	//	for (unsigned int i = 0; i < totalTiles; i++) {
-	//		tileWeights[i] = (totalVariance > 0.0f) ? tileVariances[i] / totalVariance : 0.0f;
-	//	}
+		// calculate weights for each tile
+		for (unsigned int i = 0; i < totalTiles; i++) {
+			tileWeights[i] = (totalVariance > 0.0f) ? tileVariances[i] / totalVariance : 0.0f;
+			// instead of tileVariances[i] / total, use sqrt or log for stability
+			//tileWeights[i] = sqrt(tileVariances[i] + EPSILON); 
+		}
 
-	//	// -------------RENDER---------------------------------------------------
-	//	for (unsigned int y = 0; y < tilesNumY; y++)
-	//		for (unsigned int x = 0; x < tilesNumX; x++) {
-	//			tileID.push({ x, y });
-	//		}
-	//	std::vector<std::thread> threads_render;
-	//	for (unsigned int i = 0; i < numProcs; i++) {
-	//		//threads_render.emplace_back(&RayTracer::getTileID, this);
-	//		threads_render.emplace_back([&]() {
-	//			while (true) { // get tile id
-	//				unsigned int x, y;
-	//				{
-	//					std::lock_guard<std::mutex> lock(tileIDMutex);
-	//					if (tileID.empty()) break;
-	//					x = tileID.front().first;
-	//					y = tileID.front().second;
-	//					tileID.pop();
-	//				}
-	//				// calculate index of current tile
-	//				unsigned int tileIndex = y * tilesNumX + x;
-	//				renderTileWithSample(x, y, tileIndex);
-	//			}
-	//			});
-	//	}
-	//	for (auto& t : threads_render) {
-	//		t.join();
-	//	}
-	//}
+		// -------------RENDER---------------------------------------------------
+		for (unsigned int y = 0; y < tilesNumY; y++)
+			for (unsigned int x = 0; x < tilesNumX; x++) {
+				tileID.push({ x, y });
+			}
+		std::vector<std::thread> threads_render;
+		for (unsigned int i = 0; i < numProcs; i++) {
+			//threads_render.emplace_back(&RayTracer::getTileID, this);
+			threads_render.emplace_back([this, i]() {
+				while (true) { // get tile id
+					unsigned int x, y;
+					{
+						std::lock_guard<std::mutex> lock(tileIDMutex);
+						if (tileID.empty()) break;
+						x = tileID.front().first;
+						y = tileID.front().second;
+						tileID.pop();
+					}
+					// calculate index of current tile
+					unsigned int tileIndex = y * tilesNumX + x;
+					sampleTileWithWeight(x, y, tileIndex, i);
+				}
+				});
+		}
+		for (auto& t : threads_render) {
+			t.join();
+		}
+		presentFilmToCanvas();
+	}
 
 
 	void denoise() { // only used beauty image to denoise here, no AOVs
@@ -835,64 +810,46 @@ public:
 				//Colour col = albedo(ray);
 				//Colour col = direct(ray, samplers);
 				Colour pathThroughput(1.0f, 1.0f, 1.0f);
-				//Colour col = pathTrace(ray, pathThroughput, 0, *samplers);
 				Colour col = pathTrace(ray, pathThroughput, 0, sample); // sampler per thread
 				film->splat(px, py, col);
-				unsigned char r = (unsigned char)(col.r * 255);
-				unsigned char g = (unsigned char)(col.g * 255);
-				unsigned char b = (unsigned char)(col.b * 255);
-				film->tonemap(x, y, r, g, b);
-				canvas->draw(x, y, r, g, b);
 
-			}
-		}
-	}
-
-	void draw_final() {
-		for (unsigned int y = 0; y < film->height; y++)
-		{
-			for (unsigned int x = 0; x < film->width; x++)
-			{
-				int id = (y * film->width) + x;
-				Colour col = film->film[id];
-				unsigned char r = (unsigned char)(col.r * 255);
-				unsigned char g = (unsigned char)(col.g * 255);
-				unsigned char b = (unsigned char)(col.b * 255);
-				film->tonemap(x, y, r, g, b);
-				canvas->draw(x, y, r, g, b);
 			}
 		}
 	}
 
 	void getTileID(int thread_id) {
-		while (true) {
+		while (true) { // pop IDs until queue is empty
 			unsigned int x, y;
 			{
-				// protect queue
+				// protect shared ID queue
 				std::lock_guard<std::mutex> lock(tileIDMutex);
 				if (tileID.empty()) break;
 				x = tileID.front().first;
 				y = tileID.front().second;
-				tileID.pop();
+				tileID.pop(); 
 			}
+			// get tile ID and sampler ID, then render tile
 			renderTile(x, y, samplers[thread_id]);
 		}
 	}
 	
 	void pathTracerTileBased() {
+		// init tile ID queue (0,0) (1,0) ... (X-1, Y-1) with all tiles
 		for (unsigned int y = 0; y < tilesNumY; y++)
 			for (unsigned int x = 0; x < tilesNumX; x++) {
 				tileID.push({ x, y });
 			}
-
 		std::vector<std::thread> threads_tile_render;
-
+		// create threads to render each tile
 		for (unsigned int i = 0; i < numProcs; i++) {
 			threads_tile_render.emplace_back(&RayTracer::getTileID, this, i);
 		}
 		for (auto& t : threads_tile_render) {
 			t.join();
 		}
+		//denoise();
+		// draw to canvas
+		presentFilmToCanvas();
 	}
 
 	void basicRender() {

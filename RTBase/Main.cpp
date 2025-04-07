@@ -18,11 +18,13 @@ int main(int argc, char *argv[])
 	
 	// Initialize default parameters
 	//std::string sceneName = "cornell-box";
-	std::string sceneName = "bathroom";
+	//std::string sceneName = "bathroom";
 	//std::string sceneName = "dining-room";
-	//std::string sceneName = "MaterialsScene";
+	std::string sceneName = "MaterialsScene";
+	//std::string sceneName = "coffee"; 
 	std::string filename = "GI.hdr";
 	unsigned int SPP = 8192;
+	double totalTime = 0.0;
 
 	if (argc > 1)
 	{
@@ -111,9 +113,12 @@ int main(int argc, char *argv[])
 		timer.reset();
 		rt.render();
 		float t = timer.dt();
+		totalTime += t;
+		std::cout << "Frame time: " << t << "s | Total time: " << totalTime << "s\n";
+		std::cout << "SPP: " << rt.getSPP() << "\n";
 		// Write
-		std::cout << t << std::endl;
-		//std::cout << rt.getSPP() << std::endl;
+		//std::cout << t << std::endl;
+
 		if (canvas.keyPressed('P'))
 		{
 			rt.saveHDR(filename);
@@ -124,13 +129,14 @@ int main(int argc, char *argv[])
 			std::string ldrFilename = filename.substr(0, pos) + ".png";
 			rt.savePNG(ldrFilename);
 		}
-		if (SPP == rt.getSPP())
+		std::string filename2 = "result_" + std::to_string(rt.getSPP()) + ".hdr";
+		if (totalTime >= 10 || SPP == rt.getSPP())
 		{
-			rt.saveHDR(filename);
+			rt.saveHDR(filename2);
 			break;
 		}
 		canvas.present();
-	}
+	} 
 
 	return 0;
 }

@@ -142,7 +142,6 @@ public:
 	}
 	Vec3 sample(const ShadingData& shadingData, Sampler& sampler, Colour& reflectedColour, float& pdf)
 	{
-		// Assignment: Update this code to importance sampling lighting based on luminance of each pixel
 		Vec3 wi = SamplingDistributions::uniformSampleSphere(sampler.next(), sampler.next());
 		pdf = SamplingDistributions::uniformSpherePDF(wi);
 		reflectedColour = evaluate(wi);
